@@ -484,7 +484,7 @@ try:
                                 scroll_offset = min(scroll_offset, max(0, webtoon_renderer.total_height - screen_height))
                         else:
                             scroll_speed = calculate_scroll_speed(zoom)
-                            scroll_offset -= event.y * scroll_speed
+                            scroll_offset -= event.y * scroll_speed * 2.0
                             scroll_offset = max(0, min(scroll_offset, max(0, webtoon_renderer.total_height - screen_height)))
                     elif mode == 'manga':
                         if event.y > 0:
