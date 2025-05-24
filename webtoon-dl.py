@@ -143,6 +143,8 @@ try:
         manga_name = manga_name.replace(" ", "_") if manga_name else "Manga"
         
     print(f"📖 Manga détecté: {manga_name.replace('_', ' ')}")
+    sys.stdout.write(f"📖 Manga en cours de téléchargement: {manga_name.replace('_', ' ')}\n")
+    sys.stdout.flush()
 except Exception as e:
     print(f"⚠️ Error fetching manga name: {e}")
     manga_name = "Manga"

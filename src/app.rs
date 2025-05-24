@@ -60,6 +60,7 @@ pub struct App {
     pub scroll_offset: u16,
     pub download_finished: bool, // Nouveau champ
     pub has_user_scrolled: bool,
+    pub current_download_manga_name: String,
 }
 
 impl App {
@@ -109,6 +110,7 @@ impl App {
             scroll_offset: 0,
             download_finished: false,
             has_user_scrolled: false,
+            current_download_manga_name: String::new(),
         };
         
         app.refresh_manga_list()?;
@@ -365,36 +367,43 @@ impl App {
     }
 
     pub fn tick(&mut self) {
-    if self.is_downloading {
-        // Collect all available logs first
-        let mut new_logs = Vec::new();
-        if let Some(receiver) = &self.download_log_receiver {
-            while let Ok(log) = receiver.try_recv() {
-                let clean_log = strip_ansi_escapes(&log);
-                new_logs.push(clean_log.clone());
-                debug!("Received log: {}", clean_log); // Vérifie que les logs sont reçus
+        if self.is_downloading {
+            // Collect all available logs first
+            let mut new_logs = Vec::new();
+            if let Some(receiver) = &self.download_log_receiver {
+                while let Ok(log) = receiver.try_recv() {
+                    let clean_log = strip_ansi_escapes(&log);
+                    // Check for manga name in the log
+                    if clean_log.contains("📖 Manga en cours de téléchargement:") {
+                        if let Some(name) = clean_log.split("📖 Manga en cours de téléchargement: ").nth(1) {
+                            self.current_download_manga_name = name.trim().to_string();
+                            debug!("Updated current_download_manga_name to: {}", self.current_download_manga_name);
+                        }
+                    }
+                    new_logs.push(clean_log.clone());
+                    debug!("Received log: {}", clean_log);
+                }
+            }
+    
+            // Add new logs immediately
+            if !new_logs.is_empty() {
+                self.download_logs.extend(new_logs.iter().cloned());
+                debug!("Added {} new logs to download_logs. Total: {}", new_logs.len(), self.download_logs.len());
+            }
+    
+            // Check for download completion
+            if new_logs.iter().any(|log| log.contains("Download Complete!")) {
+                self.is_downloading = false;
+                self.download_finished = true;
+                self.download_log_receiver = None;
+                self.status = format!(
+                    "Download {} terminé. Press 'r' to refresh manga list, or continue viewing logs.",
+                    self.current_download_manga_name
+                );
             }
         }
-
-        // Ajouter les nouveaux logs immédiatement
-        if !new_logs.is_empty() {
-            self.download_logs.extend(new_logs.iter().cloned());
-            debug!("Added {} new logs to download_logs. Total: {}", new_logs.len(), self.download_logs.len()); // Débogage
-        }
-
-        // Vérifier la fin du téléchargement
-        if new_logs.iter().any(|log| log.contains("Download Complete!")) {
-            self.is_downloading = false;
-            self.download_finished = true;
-            self.download_log_receiver = None;
-            self.status = format!(
-                "Download {} terminé. Press 'r' to refresh manga list, or continue viewing logs.",
-                self.current_manga().map_or("unknown", |m| &m.name)
-            );
-        }
+        self.current_page = (self.current_page + 1) % 10; // Increment for indicator
     }
-    self.current_page = (self.current_page + 1) % 10; // Incrémente pour l'indicateur
-}
 
     pub fn handle_key(&mut self, event: crossterm::event::Event) -> Result<bool> {
         match self.state {

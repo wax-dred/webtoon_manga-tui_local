@@ -143,7 +143,7 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
                         app.theme.colors[13]
                     })),
                     Span::styled(
-                        format!("- {} chapters, {} pages", manga.chapters.len(), manga.total_pages),
+                        format!("- {} chapters", manga.chapters.len()),
                         Style::default().fg(app.theme.colors[10]),
                     ),
                 ]),
@@ -470,7 +470,6 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
                 progress, completed_chapters, current_chapter_images, total_images_in_current_chapter);
         } else {
             debug!("Total chapters is 0, progress set to 0%");
-            progress = 0.0;
         }
         
         // Ajuster l'espace pour la barre de progression et les logs
@@ -501,12 +500,10 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
         .scroll((app.scroll_offset, 0));
 
         // Calculer l'avancement du téléchargement
-        let mut total_chapters = 1; // Valeur par défaut
         let mut completed_chapters = 0; // Compter les chapitres terminés
         let mut current_chapter_images = 0; // Nombre d'images téléchargées dans le chapitre en cours
         let mut total_images_in_current_chapter = 1; // Nombre total d'images dans le chapitre en cours
         let mut current_chapter = 1; // Chapitre en cours (par défaut 1)
-        let mut progress = 0.0;
 
         // Extraire le nombre total de chapitres depuis selected_chapters_input
         if !app.selected_chapters_input.is_empty() {
@@ -582,15 +579,14 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         // Modifier le titre avec le nom de l'œuvre
-        let manga_name = app.current_manga().map_or("unknown", |m| &m.name);
         let live_indicator = if app.download_finished {
-        format!("Download : {} (finished)", manga_name)
+            format!("Download : {} (finished)", app.current_download_manga_name)
         } else {
-        if app.current_page % 2 == 0 {
-            format!("Download : {} live ─_", manga_name)
-        } else {
-            format!("Download : {} live _─", manga_name)
-        }
+            if app.current_page % 2 == 0 {
+                format!("Download : {} live ─_", app.current_download_manga_name)
+            } else {
+                format!("Download : {} live _─", app.current_download_manga_name)
+            }
         };
         logs_widget = logs_widget.block(
         Block::default()
@@ -666,10 +662,10 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             .chapters
             .iter()
             .map(|chapter| {
-                let mut style = Style::default().fg(app.theme.foreground);
+                let mut style = Style::default().fg(app.theme.colors[2]);
                 let mut prefix = "☐ ";
                 if chapter.read {
-                    style = Style::default().fg(app.theme.colors[13]);
+                    style = Style::default().fg(app.theme.colors[12]);
                     prefix = "✓ ";
                 }
                 ListItem::new(vec![
