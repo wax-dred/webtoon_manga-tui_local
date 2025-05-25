@@ -144,7 +144,7 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
                     })),
                     Span::styled(
                         format!("- {} chapters", manga.chapters.len()),
-                        Style::default().fg(app.theme.colors[10]),
+                        Style::default().fg(app.theme.colors[11]),
                     ),
                 ]),
                 progress_bar_line,
@@ -159,15 +159,15 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(
                     if app.is_manga_list_focused {
-                        app.theme.colors[5]
+                        app.theme.colors[13]
                     } else {
-                        app.theme.colors[8]
+                        app.theme.colors[9]
                     },
                 )),
         )
         .highlight_style(
             Style::default()
-                .bg(app.theme.colors[7])
+                .bg(app.theme.colors[8])
                 .fg(app.theme.background)
                 .add_modifier(Modifier::BOLD),
         );
@@ -204,7 +204,7 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
                             chapter.pages,
                             chapter.size_display()
                         ),
-                        Style::default().fg(app.theme.colors[10]),
+                        Style::default().fg(app.theme.colors[11]),
                     )]),
                 ])
             })
@@ -317,7 +317,7 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
             Block::default()
                 .title(" Synopsis ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.colors[10])),
+                .border_style(Style::default().fg(app.theme.colors[11])),
         )
         .style(Style::default().fg(app.theme.foreground))
         .wrap(Wrap { trim: true });
