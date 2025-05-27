@@ -31,7 +31,7 @@ Une application complète en Rust et Python pour organiser, parcourir et lire vo
 ## 🛠️ Prérequis
 
 ### Système
-- **Linux** (testé sur Ubuntu/Debian) ou **macOS**
+- **Linux** (testé sur Arch linux) ou **macOS**
 - Windows n'est pas encore officiellement supporté
 
 ### Logiciels requis
