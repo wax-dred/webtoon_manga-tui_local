@@ -31,7 +31,7 @@ Une application complète en Rust et Python pour organiser, parcourir et lire vo
 ## 🛠️ Prérequis
 
 ### Système
-- **Linux** (testé sur Ubuntu/Debian) ou **macOS**
+- **Linux** (testé sur Arch linux) ou **macOS**
 - Windows n'est pas encore officiellement supporté
 
 ### Logiciels requis
@@ -191,16 +191,6 @@ L'application crée automatiquement `~/.config/manga_reader/config.json` :
 - Vérifiez que `unrar` et `poppler-utils` sont installés
 - Assurez-vous que le fichier CBR/CBZ/PDF est valide
 
-## 🤝 Contribution
-
-Les contributions sont les bienvenues ! Pour contribuer :
-
-1. Forkez le dépôt
-2. Créez une branche (`git checkout -b feature/nouvelle-fonction`)
-3. Committez vos changements (`git commit -m "Ajout de la fonctionnalité X"`)
-4. Poussez vers votre fork (`git push origin feature/nouvelle-fonction`)
-5. Ouvrez une Pull Request
-
 ## 📄 Licence
 
 Ce projet est distribué sous la licence MIT. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
@@ -211,4 +201,4 @@ Développé par [Wax-dred](https://github.com/wax-dred). Inspiré par la passion
 
 ---
 
-⚠️ **Note importante** : Les téléchargements sont destinés à un usage personnel et à la lecture locale. Respectez les droits d'auteur et les conditions d'utilisation des sites.
+⚠️ **Note importante** : Les téléchargements sont destinés à un usage personnel et à la lecture locale.
