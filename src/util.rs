@@ -1,37 +1,20 @@
 use anyhow::Result;
 use image::{DynamicImage, GenericImageView};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use log::debug;
+
+pub fn expand_path<P: AsRef<Path>>(path: P) -> PathBuf {
+    let path_str = path.as_ref().to_string_lossy();
+    let expanded = shellexpand::tilde(&path_str);
+    PathBuf::from(expanded.to_string())
+}
 
 pub fn load_image_info<P: AsRef<Path>>(path: P) -> Result<(u32, u32, DynamicImage)> {
     let path = path.as_ref();
-    debug!("Chargement de l'image: {:?}", path);
-    
-    // Vérifier que le fichier existe
-    if !path.exists() {
-        debug!("Le fichier image n'existe pas: {:?}", path);
-        return Err(anyhow::anyhow!("Le fichier image n'existe pas: {:?}", path));
-    }
-    
-    // Vérifier la taille du fichier
-    let file_size = std::fs::metadata(path)?.len();
-    debug!("Taille du fichier image: {} octets", file_size);
-    
-    if file_size == 0 {
-        debug!("Le fichier image est vide!");
-        return Err(anyhow::anyhow!("Le fichier image est vide!"));
-    }
-    
-    // Charger l'image
-    let img = image::open(path).map_err(|e| {
-        debug!("Erreur lors du chargement de l'image: {}", e);
-        anyhow::anyhow!("Erreur lors du chargement de l'image: {}", e)
-    })?;
-    
-    let width = img.width();
-    let height = img.height();
-    debug!("Dimensions de l'image: {}x{}", width, height);
-    
+    debug!("Loading image: {:?}", path);
+    let img = image::open(path).map_err(|e| anyhow::anyhow!("Failed to load image: {}", e))?;
+    let (width, height) = (img.width(), img.height());
+    debug!("Image dimensions: {}x{}", width, height);
     Ok((width, height, img))
 }
 
@@ -40,24 +23,16 @@ pub fn image_to_ascii<P: AsRef<Path>>(path: P, width: u32) -> Result<String> {
     debug!("Generating ASCII art for image: {:?}", path);
     
     if !path.exists() {
-        debug!("Image file does not exist: {:?}", path);
         return Err(anyhow::anyhow!("Image file does not exist: {:?}", path));
     }
     
     let img = image::open(path)?;
-    
     let (img_width, img_height) = img.dimensions();
-    debug!("Image dimensions: {}x{}", img_width, img_height);
-    
     let height = (width as f32 * img_height as f32 / img_width as f32) as u32;
-    debug!("Resizing to {}x{}", width, height);
-    
     let img = img.resize(width, height, image::imageops::FilterType::Nearest);
     
     let ascii_chars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
-    
-    debug!("Using {} ASCII characters for rendering", ascii_chars.len());
-    let mut ascii = String::new();
+    let mut ascii = Vec::with_capacity((width * height * 2 + height) as usize);
     
     for y in 0..height {
         for x in 0..width {
@@ -71,6 +46,7 @@ pub fn image_to_ascii<P: AsRef<Path>>(path: P, width: u32) -> Result<String> {
         ascii.push('\n');
     }
     
-    debug!("ASCII art generated, length: {}", ascii.len());
-    Ok(ascii)
+    let result = String::from_iter(ascii);
+    debug!("ASCII art generated, length: {}", result.len());
+    Ok(result)
 }

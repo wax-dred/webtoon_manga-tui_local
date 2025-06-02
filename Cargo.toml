@@ -25,6 +25,9 @@ hex = "0.4"
 unicode-width = "0.2"
 crossbeam-channel = "0.5"
 strip-ansi-escapes = "0.2"
+unrar = "0.4"
+pdf = "0.8"
+infer = "0.1"
 
 [profile.release]
 opt-level = 3

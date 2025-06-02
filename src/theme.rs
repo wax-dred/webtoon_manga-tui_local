@@ -49,12 +49,8 @@ pub struct Theme {
 
 impl Theme {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path_str = path.as_ref().to_string_lossy();
-        let expanded_path = shellexpand::tilde(&path_str);
-        let expanded_string = expanded_path.to_string();
-        let path = Path::new(&expanded_string);
-        
-        let json = fs::read_to_string(path).context("Failed to read wal.json")?;
+        let path = crate::util::expand_path(path);
+        let json = fs::read_to_string(&path).context("Failed to read wal.json")?;
         
         let wal: WalColors = serde_json::from_str(&json).context("Failed to parse wal.json")?;
         

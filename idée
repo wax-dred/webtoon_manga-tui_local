@@ -1,0 +1,227 @@
+En cours :  
+
+1. Améliorer l'affichage des images dans le TUI
+
+Actuellement, tu utilises ratatui_image pour afficher les couvertures des mangas et une représentation ASCII comme fallback. Cependant, l'expérience visuelle dans un terminal est limitée. Voici quelques suggestions :
+
+    Intégration d'un mode de prévisualisation d'image dans le terminal :
+        Si le terminal le supporte (par exemple, Kitty ou iTerm2), tu pourrais utiliser des protocoles comme Kitty Graphics Protocol ou Sixel pour afficher directement des images de meilleure qualité au lieu de l'ASCII art.
+        Ajoute une option dans Config pour activer/désactiver ce mode (par exemple, use_advanced_image_protocol).
+        Dans ui.rs, modifie la logique dans draw_browse et draw_details pour utiliser ce protocole si disponible, sinon retombe sur l'ASCII.
+    Prévisualisation rapide des pages :
+        Ajoute une fonctionnalité pour prévisualiser les premières pages d’un chapitre sans ouvrir le lecteur externe.
+        Par exemple, dans AppState::ViewMangaDetails, tu pourrais ajouter un raccourci (ex. p pour "preview") qui affiche une miniature ou une version ASCII de la première page du chapitre sélectionné.
+        Utilise une bibliothèque comme zip ou rar (déjà utilisée dans ton script Python) pour extraire temporairement une page et la convertir via util::image_to_ascii.
+    
+
+
+2. Intégration plus poussée avec le lecteur Python
+
+Ton script Python (manga-live.py) est utilisé comme lecteur externe pour afficher les chapitres. Voici des idées pour renforcer l'intégration :
+
+    Retour d'informations du lecteur Python :
+        Actuellement, ton application Rust lance manga-live.py via Command::new("manga-live") dans app.rs et ne récupère aucun retour. Tu pourrais modifier cette interaction pour capturer des informations, comme la dernière page lue.
+        Modifie app.rs pour que open_external attende un retour de manga-live.py. Par exemple, le script Python pourrait écrire la dernière page lue dans un fichier temporaire (ex. ~/.manga_reader/last_page.txt), que Rust pourrait lire après la fermeture du lecteur.
+        Ajoute une nouvelle propriété à Chapter (dans manga.rs) comme last_page_read: Option<usize> pour stocker cette information.
+    Passage d'arguments supplémentaires au script Python :
+        Permets à l'utilisateur de passer des options spécifiques au script Python via l'interface Rust. Par exemple, dans Config::Settings, ajoute un champ reader_options: HashMap<String, String> pour stocker des préférences comme le mode de lecture (webtoon ou manga).
+        Dans app.rs, modifie open_external pour passer ces options comme arguments supplémentaires à manga-live.py. Exemple :
+        rust
+
+        Command::new("manga-live")
+            .arg(&chapter_path)
+            .arg("--mode")
+            .arg(self.config.settings.reader_options.get("mode").unwrap_or(&"webtoon".to_string()))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    Synchronisation des chapitres lus :
+        Actuellement, le marquage des chapitres comme lus est géré par Rust (auto_mark_read). Tu pourrais permettre à manga-live.py de signaler qu'un chapitre est lu (par exemple, après avoir atteint la dernière page).
+        Modifie manga-live.py pour écrire un fichier de statut (ex. ~/.manga_reader/chapter_status.json) avec des informations comme {"path": "/path/to/chapter.cbz", "read": true}.
+        Dans app.rs, après la fermeture du lecteur externe, lis ce fichier et mets à jour Chapter::read en conséquence.
+
+3. Amélioration de la navigation et de l'interface utilisateur
+
+Ton interface est déjà bien pensée, mais voici quelques idées pour la rendre encore plus fluide :
+
+    Navigation rapide entre chapitres lus/non lus :
+        Ajoute des raccourcis pour sauter directement au prochain chapitre non lu ou au dernier chapitre lu.
+        Dans app.rs, ajoute des méthodes comme next_unread_chapter et last_read_chapter :
+        rust
+
+    fn next_unread_chapter(&mut self) {
+        if let Some(manga) = self.current_manga() {
+            if let Some(idx) = self.selected_chapter {
+                if let Some(next_unread) = manga.chapters.iter().skip(idx + 1).position(|c| !c.read) {
+                    self.selected_chapter = Some(idx + 1 + next_unread);
+                    self.status = "Jumped to next unread chapter".to_string();
+                }
+            }
+        }
+    }
+    Associe ces méthodes à des raccourcis comme n (next unread) et l (last read) dans handle_browse_input et handle_details_input.
+
+Filtrage avancé :
+
+    Actuellement, le filtrage dans filtered_mangas est basé uniquement sur le nom du manga. Ajoute des options de filtrage supplémentaires, comme :
+        Afficher uniquement les mangas avec des chapitres non lus.
+        Trier par date de modification ou par progression.
+    Ajoute un champ filter_mode: FilterMode dans App avec une enum :
+    rust
+
+enum FilterMode {
+    None,
+    ByName,
+    UnreadOnly,
+    SortByDate,
+    SortByProgress,
+}
+Modifie filtered_mangas pour appliquer ces filtres :
+rust
+
+        pub fn filtered_mangas(&self) -> Vec<&Manga> {
+            let mut mangas: Vec<&Manga> = match self.filter_mode {
+                FilterMode::UnreadOnly => self.mangas.iter().filter(|m| m.chapters.iter().any(|c| !c.read)).collect(),
+                _ => self.mangas.iter().collect(),
+            };
+            if !self.filter.is_empty() {
+                mangas = mangas.into_iter().filter(|manga| manga.name.to_lowercase().contains(&self.filter.to_lowercase())).collect();
+            }
+            match self.filter_mode {
+                FilterMode::SortByDate => mangas.sort_by(|a, b| b.chapters.iter().map(|c| c.modified).max().cmp(&a.chapters.iter().map(|c| c.modified).max())),
+                FilterMode::SortByProgress => mangas.sort_by(|a, b| self.manga_progress(b).2.partial_cmp(&self.manga_progress(a).2).unwrap_or(std::cmp::Ordering::Equal)),
+                _ => {}
+            }
+            mangas
+        }
+        Ajoute des raccourcis dans handle_browse_input pour basculer entre ces modes (ex. u pour unread only, s d pour sort by date).
+    Affichage des métadonnées supplémentaires :
+        Dans draw_browse et draw_details, affiche plus d'informations sur les mangas/chapitres, comme :
+            Le genre ou les tags (si disponibles dans un fichier metadata.json dans le dossier du manga).
+            La date de publication (si extraite du nom ou d’un fichier).
+        Modifie Manga::from_path pour charger ces métadonnées et les stocker dans des champs comme genre: Option<String> ou tags: Vec<String>.
+
+4. Amélioration de la gestion des téléchargements
+
+Ton système de téléchargement via webtoon-dl est fonctionnel, mais il peut être amélioré pour une meilleure expérience utilisateur :
+
+    Téléchargements en arrière-plan :
+        Actuellement, pendant un téléchargement (AppState::Downloading), l’utilisateur doit attendre ou annuler pour continuer à naviguer. Permets de poursuivre la navigation pendant le téléchargement.
+        Dans launch_webtoon_downloader, au lieu de passer directement à AppState::Downloading, conserve l’état actuel et affiche une notification ou une barre de progression dans le coin de l’écran.
+        Ajoute un champ background_downloads: Vec<DownloadStatus> dans App pour suivre les téléchargements en cours :
+        rust
+
+        struct DownloadStatus {
+            url: String,
+            chapters: String,
+            logs: Vec<String>,
+            receiver: Receiver<String>,
+            finished: bool,
+        }
+        Modifie tick pour mettre à jour tous les téléchargements en cours et affiche un résumé dans draw (par exemple, une petite barre de progression en bas à droite).
+    Validation des entrées de téléchargement :
+        Dans handle_download_input, ajoute une validation pour download_url et selected_chapters_input. Par exemple :
+            Vérifie que l’URL commence par http:// ou https://.
+            Pour les chapitres, vérifie que l’entrée est au format 1,2,3 ou 1-3.
+        Si l’entrée est invalide, affiche un message d’erreur dans status et empêche le lancement du téléchargement.
+    Reprise des téléchargements interrompus :
+        Si un téléchargement est annulé (via Esc), permets de le reprendre là où il s’est arrêté.
+        Stocke l’état du téléchargement dans Config (par exemple, last_downloaded_image pour chaque chapitre) et passe cette information à webtoon-dl via un argument comme --resume-from.
+
+5. Ajout de fonctionnalités de lecture intégrée
+
+Plutôt que de dépendre entièrement du lecteur externe (manga-live.py), tu pourrais ajouter un mode de lecture intégré directement dans l’application Rust :
+
+    Mode de lecture simple :
+        Ajoute un nouvel AppState::Reading qui affiche les pages d’un chapitre directement dans le terminal.
+        Utilise une bibliothèque comme zip pour extraire les images d’un fichier .cbz et affiche-les page par page avec ratatui_image ou en ASCII.
+        Implémente une navigation basique (ex. j/k pour avancer/reculer, q pour quitter).
+        Exemple de structure dans app.rs :
+        rust
+
+    fn enter_reading_mode(&mut self) -> Result<()> {
+        if let Some(chapter) = self.current_chapter() {
+            self.state = AppState::Reading;
+            self.current_page = 0;
+            // TODO: Charger les images du chapitre
+            self.status = "Reading mode".to_string();
+        }
+        Ok(())
+    }
+    Ajoute un raccourci dans handle_browse_input (ex. r pour "read") pour entrer dans ce mode.
+
+Synchronisation avec le mode Webtoon/Manga :
+
+    Si l’utilisateur préfère le mode Webtoon ou Manga (comme dans ton script Python), permets de basculer entre ces modes dans l’interface Rust.
+    Ajoute un champ preferred_reading_mode: ReadingMode dans Config::Settings :
+    rust
+
+        enum ReadingMode {
+            Integrated, // Lecture dans le TUI
+            External,   // Utilise manga-live.py
+            Webtoon,    // Mode Webtoon via manga-live.py
+            Manga,      // Mode Manga via manga-live.py
+        }
+        Modifie open_external pour respecter ce paramètre et lancer le mode approprié.
+
+6. Amélioration des performances
+
+Voici quelques optimisations pour rendre l’application plus rapide et fluide :
+
+    Cache des métadonnées :
+        Actuellement, Manga::from_path lit les fichiers à chaque actualisation (refresh_manga_list). Cela peut être lent pour un grand nombre de mangas.
+        Ajoute un cache des métadonnées dans Config (par exemple, manga_cache: HashMap<PathBuf, Manga>). Mets à jour ce cache uniquement si le répertoire a été modifié (en comparant les dates de modification).
+        Dans refresh_manga_list, utilise le cache si possible :
+        rust
+
+    pub fn refresh_manga_list(&mut self) -> Result<()> {
+        // Vérifier si le répertoire a changé
+        let dir_metadata = std::fs::metadata(&self.manga_dir)?;
+        let last_modified = dir_metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
+        if self.config.last_scan_time.unwrap_or(0) >= last_modified {
+            self.mangas = self.config.manga_cache.values().cloned().collect();
+        } else {
+            self.mangas = Manga::scan_directory(&self.manga_dir, &self.config)?;
+            self.config.last_scan_time = Some(last_modified);
+            self.config.manga_cache = self.mangas.iter().map(|m| (m.path.clone(), m.clone())).collect();
+            self.config.save()?;
+        }
+        self.selected_manga = if self.mangas.is_empty() { None } else { Some(0) };
+        self.selected_chapter = None;
+        self.load_cover_image()?;
+        Ok(())
+    }
+
+Chargement différé des couvertures :
+
+    Actuellement, load_cover_image est appelé à chaque changement de manga ou redimensionnement. Cela peut être coûteux, surtout pour des images volumineuses.
+    Charge les couvertures de manière asynchrone ou uniquement pour les mangas visibles à l’écran.
+    Utilise un thread::spawn pour charger les images en arrière-plan et mets à jour image_state une fois le chargement terminé.
+
+Optimisation de l’ASCII art :
+
+    La conversion en ASCII (image_to_ascii) peut être lente pour de grandes images. Ajoute une version plus rapide qui réduit d’abord l’image à une taille plus petite avant de convertir.
+    Exemple dans util.rs :
+    rust
+
+        let img = img.resize(width / 2, height / 2, image::imageops::FilterType::Nearest);
+
+7. Personnalisation et thèmes
+
+    Thèmes dynamiques :
+        Actuellement, tu charges un thème depuis ~/.cache/wal/wal.json. Permets à l’utilisateur de choisir entre plusieurs thèmes prédéfinis ou de personnaliser les couleurs via un fichier de configuration.
+        Ajoute un champ theme_name: String dans Config et charge différents fichiers de thème (ex. ~/.config/manga_reader/themes/dark.json).
+    Raccourcis personnalisables :
+        Rends les raccourcis configurables via Config. Par exemple, ajoute un champ keybindings: HashMap<String, String> pour mapper des actions comme "open_chapter": "o" ou "refresh": "r".
+        Dans handle_browse_input et autres méthodes, utilise ces mappings pour déterminer les actions.
+
+8. Accessibilité et expérience utilisateur
+
+    Mode débutant :
+        Ajoute un mode simplifié pour les nouveaux utilisateurs, avec moins de raccourcis et des instructions plus visibles.
+        Par exemple, affiche un tutoriel la première fois que l’application est lancée (vérifie via un champ first_run: bool dans Config).
+    Support multilingue :
+        Actuellement, les messages et l’interface sont en français et anglais mélangés (ex. "Liste de mangas actualisée", "Download started"). Ajoute un support multilingue via un fichier de traduction (ex. lang/en.json, lang/fr.json).
+        Charge la langue en fonction d’une variable d’environnement (LANG) ou d’un paramètre dans Config.
+    Indicateurs visuels :
+        Améliore les indicateurs visuels pour les téléchargements. Par exemple, dans draw_downloading, utilise des couleurs différentes pour chaque étape du téléchargement (ex. vert pour terminé, orange pour en cours, rouge pour erreur).

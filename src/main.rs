@@ -18,56 +18,77 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{prelude::*, Terminal};
+use log::{debug, info};
+use env_logger::Builder;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 use app::App;
+use event::Event as AppEvent;
 
-/// Terminal-based manga reader written in Rust
 #[derive(Parser, Debug)]
-#[clap(author, version, about)]
+#[clap(author, version)]
 struct Args {
-    /// Path to manga directory
     #[clap(short, long, default_value = "~/Documents/Scan")]
     manga_dir: String,
-
-    /// Enable debug logging
     #[clap(short, long)]
     debug: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
-    // Initialize logger
-    if args.debug {
-        std::env::set_var("RUST_LOG", "debug");
-        env_logger::init();
-    }
-    
+
+    // Initialiser le logger
+    let log_file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open("manga_reader.log")
+        .context("Failed to open log file")?;
+
+    Builder::new()
+        .filter(None, if args.debug { log::LevelFilter::Debug } else { log::LevelFilter::Info })
+        .format(|buf, record| {
+            use chrono::Local;
+            writeln!(
+                buf,
+                "[{}] {} - {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .init();
+
+    info!("Démarrage de l'application manga reader");
+
     let manga_dir = PathBuf::from(shellexpand::tilde(&args.manga_dir).to_string());
     run(manga_dir)
 }
 
 fn run(manga_dir: PathBuf) -> Result<()> {
-    // Setup terminal
-    enable_raw_mode().context("Failed to enable raw mode")?;
+    // Configurer le terminal
+    enable_raw_mode().context("Échec de l'activation du mode brut")?;
     io::stdout()
         .execute(EnterAlternateScreen)
-        .context("Failed to enter alternate screen")?;
-    
-    // Enable mouse capture
+        .context("Échec de l'entrée dans l'écran alternatif")?;
+
+    // Activer la capture de la souris
     io::stdout()
         .execute(crossterm::event::EnableMouseCapture)
-        .context("Failed to enable mouse capture")?;
+        .context("Échec de l'activation de la capture de la souris")?;
+    debug!("Capture de la souris activée");
 
     let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
+    let mut terminal = Terminal::new(backend).context("Échec de la création du terminal")?;
     terminal.clear()?;
 
-    // Load theme
+    // Charger le thème
     let theme = match theme::Theme::load("~/.cache/wal/wal.json") {
         Ok(theme) => theme,
         Err(_) => {
-            // Fallback default theme
+            debug!("Échec du chargement du thème, utilisation du thème par défaut");
             theme::Theme {
                 background: Color::Black,
                 foreground: Color::White,
@@ -81,58 +102,69 @@ fn run(manga_dir: PathBuf) -> Result<()> {
             }
         }
     };
-    
-    // Load config to check last_manga_dir
+
+    // Charger la configuration
     let config = config::Config::load()?;
     let manga_dir = if manga_dir != PathBuf::from(shellexpand::tilde("~/Documents/Scan").to_string()) {
-        // Use command-line manga_dir if specified
         manga_dir
     } else if let Some(last_dir) = config.last_manga_dir {
-        // Use last_manga_dir from config if available
         last_dir
     } else {
-        // Fallback to default
         manga_dir
     };
 
-    // Create app state
+    // Créer l'état de l'application
     let mut app = App::new(manga_dir, theme)?;
-    
-    // Create event handler
+
+    // Créer le gestionnaire d'événements
     let event_handler = event::EventHandler::new(Duration::from_millis(100));
 
-    // Main loop
+    // Boucle principale
     loop {
-        // Draw UI
         terminal.draw(|frame| ui::draw(frame, &mut app))?;
-        
-        // Handle events
+
         match event_handler.next()? {
-            event::Event::Tick => app.tick(),
-            event::Event::Key(key_event) => {
-                if app.handle_key(crossterm::event::Event::Key(key_event))? {
+            AppEvent::Tick => {
+                app.tick()?;
+            }
+            AppEvent::Key(key_event) => {
+                debug!("Événement clé: {:?}", key_event);
+                if app.handle_key(&AppEvent::Key(key_event))? {
                     break;
                 }
+                if app.needs_refresh {
+                    terminal.draw(|frame| ui::draw(frame, &mut app))?;
+                    app.reset_refresh();
+                }
             }
-            event::Event::Resize(width, height) => {
-                app.on_resize(width, height);
+            AppEvent::Resize(width, height) => {
+                debug!("Redimensionnement: {}x{}", width, height);
+                app.on_resize(width, height)?;
+                terminal.draw(|frame| ui::draw(frame, &mut app))?;
             }
-            event::Event::Mouse(mouse_event) => {
-                if app.handle_key(crossterm::event::Event::Mouse(mouse_event))? {
+            AppEvent::Mouse(mouse_event) => {
+                debug!("Événement souris: {:?}", mouse_event);
+                if app.handle_key(&AppEvent::Mouse(mouse_event))? {
                     break;
+                }
+                if app.needs_refresh {
+                    terminal.draw(|frame| ui::draw(frame, &mut app))?;
+                    app.reset_refresh();
                 }
             }
         }
     }
-    
-    // Restore terminal
-    disable_raw_mode().context("Failed to disable raw mode")?;
-    io::stdout()
-        .execute(LeaveAlternateScreen)
-        .context("Failed to leave alternate screen")?;
+
+    // Restaurer le terminal
     io::stdout()
         .execute(crossterm::event::DisableMouseCapture)
-        .context("Failed to disable mouse capture")?;
-    
+        .context("Échec de la désactivation de la capture de la souris")?;
+    debug!("Capture de la souris désactivée");
+
+    disable_raw_mode().context("Échec de la désactivation du mode brut")?;
+    io::stdout()
+        .execute(LeaveAlternateScreen)
+        .context("Échec de la sortie de l'écran alternatif")?;
+
     Ok(())
 }
