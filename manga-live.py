@@ -17,14 +17,64 @@ from pdf2image import convert_from_path
 import json
 import argparse
 import time
+import random
+import math
 
-# Config logger (remplace les prints de debug)
+# Config logger
 logging.basicConfig(level=logging.WARNING, format='[%(levelname)s] %(message)s')
 
 # Préparer Pygame avant import
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 os.environ['SDL_LOGGING'] = '0'
 os.environ['SDL_VIDEODRIVER'] = os.environ.get('XDG_SESSION_TYPE', 'wayland')
+
+def load_wal_colors():
+    """Charge les couleurs depuis ~/.cache/wal/wal.json ou retourne les couleurs par défaut."""
+    default_colors = {
+        "background": (20, 20, 20),
+        "foreground": (255, 255, 255),
+        "button_bg": (50, 50, 50),
+        "button_hover": (80, 80, 80),
+        "slider_bg": (50, 50, 50),
+        "slider_handle": (80, 80, 80),
+        "progress_bar_bg": (245, 247, 255),
+        "progress_bar_left": (230, 237, 255),
+        "progress_bar_right": (120, 170, 255),
+        "progress_bubble": (255, 255, 255),
+        "progress_bubble_text": (70, 90, 120),
+        "thumbnail_bg": (20, 20, 20, 200)
+    }
+    wal_path = Path.home() / ".cache" / "wal" / "wal.json"
+    if not wal_path.exists():
+        logging.warning("wal.json non trouvé, utilisation des couleurs par défaut")
+        return default_colors
+
+    try:
+        with open(wal_path, "r", encoding='utf-8') as f:
+            wal_data = json.load(f)
+        # Conversion des couleurs hex en tuples RGB
+        def hex_to_rgb(hex_str):
+            hex_str = hex_str.lstrip('#')
+            return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
+
+        colors = {
+            "background": hex_to_rgb(wal_data.get("special", {}).get("background", "#222224")),
+            "foreground": hex_to_rgb(wal_data.get("special", {}).get("foreground", "#E4C1B7")),
+            "button_bg": hex_to_rgb(wal_data.get("colors", {}).get("color0", "#48484A")),
+            "button_hover": hex_to_rgb(wal_data.get("colors", {}).get("color8", "#926F64")),
+            "slider_bg": hex_to_rgb(wal_data.get("colors", {}).get("color1", "#2B1513")),
+            "slider_handle": hex_to_rgb(wal_data.get("colors", {}).get("color7", "#D09E8F")),
+            "progress_bar_bg": hex_to_rgb(wal_data.get("colors", {}).get("color7", "#D09E8F")),
+            "progress_bar_left": hex_to_rgb(wal_data.get("colors", {}).get("color10", "#25262C")),
+            "progress_bar_right": hex_to_rgb(wal_data.get("colors", {}).get("color14", "#B34E30")),
+            "progress_bubble": hex_to_rgb(wal_data.get("special", {}).get("foreground", "#E4C1B7")),
+            "progress_bubble_text": hex_to_rgb(wal_data.get("colors", {}).get("color5", "#713423")),
+            "thumbnail_bg": (*hex_to_rgb(wal_data.get("colors", {}).get("color0", "#48484A")), 200)
+        }
+        return colors
+    except Exception as e:
+        logging.error(f"Erreur lors du chargement de wal.json: {e}")
+        return default_colors
 
 def cleanup():
     pygame.display.quit()
@@ -234,12 +284,10 @@ def draw_gradient_rect(surface, rect, radius, progress):
         block_color = (r, g, b)
         pygame.draw.line(bloc_surf, block_color, (x, 0), (x, rect.height-1))
 
-    # Masque arrondi
     mask = pygame.Surface((fill_width, rect.height), pygame.SRCALPHA)
     pygame.draw.rect(mask, (255,255,255,255), (0,0,fill_width,rect.height), border_radius=radius)
     bloc_surf.blit(mask, (0,0), special_flags=pygame.BLEND_RGBA_MULT)
 
-    # Gloss subtil
     gloss = pygame.Surface((fill_width, int(rect.height * 0.35)), pygame.SRCALPHA)
     gloss.fill((255,255,255,32))
     bloc_surf.blit(gloss, (0,0))
@@ -262,15 +310,23 @@ def draw_rounded_rect(surface, color, rect, radius=10, width=0, shadow=False):
     
     surface.blit(temp_surf, (rect.x, rect.y), special_flags=pygame.BLEND_PREMULTIPLIED)
 
+def safe_color(color):
+    """Retourne un tuple RGB pour pygame.draw.*"""
+    if isinstance(color, tuple):
+        if len(color) == 4:
+            return color[:3]
+        return color
+    return (0, 0, 0)
+
 ### UI widgets ###
 class ModernButton:
-    def __init__(self, x, y, w, h, text, font, bg_color=(50, 50, 50), hover_color=(80,80,80), text_color=(255,255,255)):
+    def __init__(self, x, y, w, h, text, font, colors):
         self.rect = pygame.Rect(x, y, w, h)
         self.text = text
         self.font = font
-        self.bg_color = bg_color
-        self.hover_color = hover_color
-        self.text_color = text_color
+        self.bg_color = colors["button_bg"]
+        self.hover_color = colors["button_hover"]
+        self.text_color = colors["foreground"]
         self.is_hovered = False
 
     def handle_event(self, event):
@@ -289,13 +345,14 @@ class ModernButton:
         surface.blit(text_surf, text_rect)
 
 class Slider:
-    def __init__(self, x, y, width, height, min_value, max_value, initial_value, bg_color=(50, 50, 50), handle_color=(80, 80, 80)):
+    def __init__(self, x, y, width, height, min_value, max_value, initial_value, colors):
         self.rect = pygame.Rect(x, y, width, height)
         self.min_value = min_value
         self.max_value = max_value
         self.value = initial_value
-        self.bg_color = bg_color
-        self.handle_color = handle_color
+        self.bg_color = colors["slider_bg"]
+        self.handle_color = colors["slider_handle"]
+        self.text_color = colors["foreground"]
         self.handle_width = 10
         self.dragging = False
         self.update_handle_position()
@@ -321,39 +378,189 @@ class Slider:
         pygame.draw.rect(surface, self.bg_color, self.rect)
         draw_rounded_rect(surface, self.handle_color, self.handle_rect, radius=5)
         font = pygame.font.SysFont('arial', 14)
-        text = font.render(f"Speed: {int(self.value)}", True, (255, 255, 255))
+        text = font.render(f"Speed: {int(self.value)}", True, self.text_color)
         text_rect = text.get_rect(center=(self.rect.centerx, self.rect.y + self.rect.height + 15))
         surface.blit(text, text_rect)
-        
+
+class ThumbnailViewer:
+    def __init__(self, x, y, width, height, images, cache, screen_width, screen_height, colors):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.images = images
+        self.cache = cache
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.thumbnail_size = (100, 150)
+        self.gap = 10
+        self.visible = False
+        self.scroll_offset = 0
+        self.thumbnails = []
+        self.bg_color = colors["thumbnail_bg"]
+        self.text_color = colors["foreground"]
+        self.generate_thumbnails()
+        self.calculate_layout()
+
+    def generate_thumbnails(self):
+        for img_path in self.images:
+            thumb_key = f"thumb_{img_path}"
+            cached = self.cache.get(thumb_key)
+            if not cached:
+                try:
+                    with Image.open(img_path) as img:
+                        img = img.convert('RGB')
+                        img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                        thumb_surf = pygame.image.fromstring(img.tobytes(), img.size, 'RGB')
+                        self.cache.put(thumb_key, (thumb_surf, img.size))
+                    logging.info(f"Vignette générée pour {img_path}")
+                except Exception as e:
+                    logging.error(f"Erreur génération vignette {img_path}: {e}")
+                    thumb_surf = pygame.Surface(self.thumbnail_size)
+                    thumb_surf.fill((50, 50, 50))
+                    self.cache.put(thumb_key, (thumb_surf, self.thumbnail_size))
+            self.thumbnails.append(thumb_key)
+
+    def calculate_layout(self):
+        self.positions = []
+        y = self.gap
+        for _ in self.thumbnails:
+            self.positions.append(y)
+            y += self.thumbnail_size[1] + self.gap
+        self.total_height = y
+
+    def get_visible_indices(self):
+        top = self.scroll_offset
+        bottom = self.scroll_offset + self.rect.height
+        visible = []
+        for i, y in enumerate(self.positions):
+            if y + self.thumbnail_size[1] >= top and y <= bottom:
+                visible.append(i)
+        return visible
+
+    def handle_event(self, event):
+        if not self.visible:
+            return None
+        mouse_pos = pygame.mouse.get_pos()
+        if not self.rect.collidepoint(mouse_pos):
+            return None
+        if event.type == pygame.MOUSEWHEEL:
+            scroll_speed = 50
+            self.scroll_offset = max(0, min(self.scroll_offset - event.y * scroll_speed, max(0, self.total_height - self.rect.height)))
+            return "consumed"
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            rel_y = event.pos[1] - self.rect.y + self.scroll_offset
+            for i, y in enumerate(self.positions):
+                if y <= rel_y < y + self.thumbnail_size[1]:
+                    return i + 1
+        return None
+
+    def draw(self, surface, current_page):
+        if not self.visible:
+            return
+        draw_rounded_rect(surface, self.bg_color, self.rect, radius=10, shadow=True)
+        visible_indices = self.get_visible_indices()
+        font = pygame.font.SysFont('arial', 14, bold=True)
+        for i in visible_indices:
+            thumb_key = self.thumbnails[i]
+            cached = self.cache.get(thumb_key)
+            if cached is None:
+                try:
+                    with Image.open(self.images[i]) as img:
+                        img = img.convert('RGB')
+                        img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+                        thumb_surf = pygame.image.fromstring(img.tobytes(), img.size, 'RGB')
+                        self.cache.put(thumb_key, (thumb_surf, img.size))
+                        thumb_surf, thumb_size = thumb_surf, img.size
+                except Exception as e:
+                    logging.error(f"Erreur régénération vignette {self.images[i]}: {e}")
+                    thumb_surf = pygame.Surface(self.thumbnail_size)
+                    thumb_surf.fill((50, 50, 50))
+                    thumb_size = self.thumbnail_size
+            else:
+                thumb_surf, thumb_size = cached
+            x = self.rect.x + (self.rect.width - thumb_size[0]) // 2
+            y = self.rect.y + self.positions[i] - self.scroll_offset
+            if y + thumb_size[1] >= self.rect.y and y <= self.rect.y + self.rect.height:
+                surface.blit(thumb_surf, (x, y))
+                if i + 1 == current_page:
+                    pygame.draw.rect(surface, (255, 255, 0), (x, y, thumb_size[0], thumb_size[1]), 2)
+                page_number = str(i + 1)
+                text_surf = font.render(page_number, True, self.text_color)
+                text_rect = text_surf.get_rect(centery=y + thumb_size[1] // 2, right=x - 5)
+                surface.blit(text_surf, text_rect)
+
 class ModernProgressBar:
-    def __init__(self, x, y, width, height, radius=18):
+    def __init__(self, x, y, width, height, radius=20, colors=None):
         self.rect = pygame.Rect(x, y, width, height)
         self.radius = radius
         self.progress = 0.0
+        self.animation_offset = 0.0
+        self.colors = colors
 
     def draw(self, surface, progress, current_page, total_pages, show_text=True):
         self.progress += (progress - self.progress) * 0.2
+        percent = int(self.progress * 100)
 
-        # Ombre douce sous la barre
+        self._draw_soft_background(surface, self.rect, self.radius)
         shadow_rect = self.rect.copy()
         shadow_rect.y += 6
-        draw_rounded_rect(surface, (30, 30, 30), shadow_rect, radius=self.radius + 3, shadow=False)
+        self._draw_glow(surface, shadow_rect, (*self.colors["background"], 30), blur_size=8)
+        inner_rect = self.rect.inflate(-8, -8)
+        fill_width = int(inner_rect.width * self.progress)
+        if fill_width > 0:
+            fill_rect = pygame.Rect(inner_rect.x, inner_rect.y, fill_width, inner_rect.height)
+            self._draw_gradient_fill(surface, fill_rect, self.radius-6)
+        if fill_width > 30:
+            self._draw_progress_bubble(surface, inner_rect, fill_width, percent)
+        if show_text and fill_width <= 30:
+            self._draw_center_text(surface, self.rect, percent)
 
-        # Bordure flashy
-        draw_rounded_rect(surface, (255, 255, 255), self.rect, radius=self.radius + 3, width=3)
+    def _draw_soft_background(self, surface, rect, radius):
+        bg_surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(bg_surf, self.colors["progress_bar_bg"], (0, 0, rect.width, rect.height), border_radius=radius)
+        pygame.draw.rect(bg_surf, (*self.colors["progress_bar_bg"], 200), (0, 0, rect.width, rect.height), width=2, border_radius=radius)
+        surface.blit(bg_surf, (rect.x, rect.y))
 
-        # Dégradé flashy avec bords arrondis
-        inner_rect = self.rect.inflate(-6, -6)
-        draw_gradient_rect(surface, inner_rect, self.radius, self.progress)
+    def _draw_glow(self, surface, rect, color, blur_size=3):
+        for i in range(blur_size, 0, -1):
+            alpha = color[3] // (i + 1)
+            glow_rect = rect.inflate(i * 4, i * 2)
+            glow_surf = pygame.Surface((glow_rect.width, glow_rect.height), pygame.SRCALPHA)
+            pygame.draw.ellipse(glow_surf, (*color[:3], alpha), (0, 0, glow_rect.width, glow_rect.height))
+            surface.blit(glow_surf, (glow_rect.x, glow_rect.y))
 
-        # Texte
-        if show_text and total_pages > 0:
-            font = pygame.font.SysFont('arial', int(self.rect.height * 0.65), bold=True)
-            status = "✓" if self.progress >= 1.0 else ""
-            txt = f"{status} {int(self.progress * 100)}% (Pg {current_page}/{total_pages})"
-            text_surface = font.render(txt, True, (250, 255, 0) if self.progress > 0.6 else (0, 0, 50))
-            text_rect = text_surface.get_rect(center=self.rect.center)
-            surface.blit(text_surface, text_rect)
+    def _draw_gradient_fill(self, surface, rect, radius):
+        grad_surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        for x in range(rect.width):
+            t = x / max(rect.width-1,1)
+            r = int(self.colors["progress_bar_left"][0] + (self.colors["progress_bar_right"][0] - self.colors["progress_bar_left"][0]) * t)
+            g = int(self.colors["progress_bar_left"][1] + (self.colors["progress_bar_right"][1] - self.colors["progress_bar_left"][1]) * t)
+            b = int(self.colors["progress_bar_left"][2] + (self.colors["progress_bar_right"][2] - self.colors["progress_bar_left"][2]) * t)
+            pygame.draw.line(grad_surf, (r, g, b), (x, 0), (x, rect.height))
+        mask = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(mask, (255,255,255,255), (0, 0, rect.width, rect.height), border_radius=radius)
+        grad_surf.blit(mask, (0,0), special_flags=pygame.BLEND_RGBA_MULT)
+        surface.blit(grad_surf, (rect.x, rect.y))
+
+    def _draw_progress_bubble(self, surface, inner_rect, fill_width, percent):
+        bubble_radius = inner_rect.height // 2 + 2
+        cx = inner_rect.x + fill_width
+        cy = inner_rect.centery
+        shadow_surf = pygame.Surface((bubble_radius*2+4, bubble_radius*2+4), pygame.SRCALPHA)
+        pygame.draw.circle(shadow_surf, (*self.colors["background"], 60), (bubble_radius+2, bubble_radius+4), bubble_radius)
+        surface.blit(shadow_surf, (cx-bubble_radius-2, cy-bubble_radius-2))
+        pygame.draw.circle(surface, self.colors["progress_bubble"], (cx, cy), bubble_radius)
+        pygame.draw.circle(surface, (*self.colors["progress_bubble"], 200), (cx, cy), bubble_radius, width=2)
+        font = pygame.font.SysFont('arial', bubble_radius, bold=True)
+        percent_text = f"{percent}%"
+        text_surface = font.render(percent_text, True, self.colors["progress_bubble_text"])
+        text_rect = text_surface.get_rect(center=(cx, cy))
+        surface.blit(text_surface, text_rect)
+
+    def _draw_center_text(self, surface, rect, percent):
+        font = pygame.font.SysFont('arial', int(rect.height*0.5), bold=True)
+        percent_text = f"{percent}%"
+        text_surface = font.render(percent_text, True, self.colors["progress_bubble_text"])
+        text_rect = text_surface.get_rect(center=rect.center)
+        surface.blit(text_surface, text_rect)
 
 ### Renderers ###
 class BaseRenderer:
@@ -427,7 +634,6 @@ class WebtoonRenderer(BaseRenderer):
                 if y + h >= 0 and y <= self.screen_height:
                     screen.blit(img, (x, y))
             else:
-                # Placeholder
                 pygame.draw.rect(screen, (50,50,50), (50, self.image_positions[i]-scroll_offset, self.screen_width-100, 100))
         return indices
 
@@ -480,6 +686,9 @@ def main(archive_path, start_page=1):
         pygame.init()
         pygame.mixer.quit()
 
+        # Charger les couleurs
+        colors = load_wal_colors()
+
         screen_info = pygame.display.Info()
         screen_width, screen_height = screen_info.current_w - 100, screen_info.current_h - 100
         screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE | pygame.DOUBLEBUF)
@@ -494,7 +703,6 @@ def main(archive_path, start_page=1):
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / "image_list.pkl"
 
-        # Extraction/cache des images
         if cache_file.exists():
             try:
                 with open(cache_file, 'rb') as f:
@@ -522,15 +730,13 @@ def main(archive_path, start_page=1):
             logging.error("Aucune image valide trouvée dans l'archive ou le cache.")
             cleanup()
 
-        # Mode
         mode = detect_mode(images)
-        image_cache = ImageCache(max_size=30)
+        image_cache = ImageCache(max_size=50)
         webtoon_renderer = WebtoonRenderer(images, screen_width, screen_height, image_cache)
         manga_renderer = MangaRenderer(images, screen_width, screen_height, image_cache)
         zoom = 1.0
         scroll_offset = 0
 
-        # Progression
         manga_name, chapter_number = parse_manga_and_chapter(archive_path)
         progress_mgr = ProgressManager()
         start_page = start_page if start_page > 0 else progress_mgr.load(manga_name, chapter_number)
@@ -546,12 +752,12 @@ def main(archive_path, start_page=1):
                 scroll_offset = 0
                 current_page = 1
 
-        # UI
         font = pygame.font.SysFont('arial', 18, bold=True)
-        mode_button = ModernButton(screen_width - 250, 10, 120, 30, f"{mode.capitalize()}", font)
-        play_button = ModernButton(screen_width - 120, 10, 100, 30, "Play", font)
-        speed_slider = Slider(screen_width - 140, 50, 100, 10, 150, 1200, 500)
-        progress_bar = ModernProgressBar(screen_width - 300, screen_height - 200, 200, 25)
+        mode_button = ModernButton(screen_width - 250, 10, 120, 30, f"{mode.capitalize()}", font, colors)
+        play_button = ModernButton(screen_width - 120, 10, 100, 30, "Play", font, colors)
+        speed_slider = Slider(screen_width - 140, 50, 100, 10, 150, 1200, 500, colors)
+        progress_bar = ModernProgressBar(screen_width - 300, screen_height - 200, 200, 25, colors=colors)
+        thumbnail_viewer = ThumbnailViewer(10, 10, 120, screen_height - 20, images, image_cache, screen_width, screen_height, colors)
         running = True
         is_scrolling = False
         last_scroll_time = pygame.time.get_ticks() / 1000.0
@@ -563,6 +769,8 @@ def main(archive_path, start_page=1):
             play_button.rect.topleft = (screen_width - 120, 10)
             speed_slider.rect.topleft = (screen_width - 240, 50)
             progress_bar.rect.topright = (screen_width - 20, screen_height - 30)
+            thumbnail_viewer.rect = pygame.Rect(10, 10, 120, screen_height - 20)
+            thumbnail_viewer.calculate_layout()
             webtoon_renderer.update_screen(screen_width, screen_height)
             manga_renderer.update_screen(screen_width, screen_height)
             webtoon_renderer.calculate_layout(zoom)
@@ -580,7 +788,9 @@ def main(archive_path, start_page=1):
                 elif event.type == pygame.VIDEORESIZE:
                     update_layout()
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_q:
+                    if event.key == pygame.K_TAB:
+                        thumbnail_viewer.visible = not thumbnail_viewer.visible
+                    elif event.key == pygame.K_q:
                         running = False
                     elif event.key == pygame.K_m:
                         mode = 'manga'
@@ -593,23 +803,36 @@ def main(archive_path, start_page=1):
                     elif event.key == pygame.K_RETURN and mode == 'webtoon':
                         is_scrolling = not is_scrolling
                         play_button.text = "Stop" if is_scrolling else "Play"
-                    elif mode == 'webtoon':
-                        if event.key == pygame.K_HOME: scroll_offset = 0
-                        elif event.key == pygame.K_END: scroll_offset = max(0, webtoon_renderer.total_height - screen_height)
-                        elif event.key == pygame.K_PAGEDOWN: scroll_offset = min(scroll_offset + screen_height, max(0, webtoon_renderer.total_height - screen_height))
-                        elif event.key == pygame.K_PAGEUP: scroll_offset = max(0, scroll_offset - screen_height)
-                    elif mode == 'manga':
-                        if event.key == pygame.K_HOME: manga_renderer.go_to_page(0)
-                        elif event.key == pygame.K_END: manga_renderer.go_to_page(len(images)-1)
-                        elif event.key in [pygame.K_PAGEDOWN, pygame.K_DOWN]: manga_renderer.next_page()
-                        elif event.key in [pygame.K_PAGEUP, pygame.K_UP]: manga_renderer.prev_page()
+                    elif not thumbnail_viewer.visible:
+                        if mode == 'webtoon':
+                            if event.key == pygame.K_HOME: scroll_offset = 0
+                            elif event.key == pygame.K_END: scroll_offset = max(0, webtoon_renderer.total_height - screen_height)
+                            elif event.key == pygame.K_PAGEDOWN: scroll_offset = min(scroll_offset + screen_height, max(0, webtoon_renderer.total_height - screen_height))
+                            elif event.key == pygame.K_PAGEUP: scroll_offset = max(0, scroll_offset - screen_height)
+                        elif mode == 'manga':
+                            if event.key == pygame.K_HOME: manga_renderer.go_to_page(0)
+                            elif event.key == pygame.K_END: manga_renderer.go_to_page(len(images)-1)
+                            elif event.key in [pygame.K_PAGEDOWN, pygame.K_DOWN]: manga_renderer.next_page()
+                            elif event.key in [pygame.K_PAGEUP, pygame.K_UP]: manga_renderer.prev_page()
                 elif event.type == pygame.MOUSEWHEEL:
-                    if mode == 'webtoon':
-                        scroll_speed = calculate_scroll_speed(zoom)
-                        scroll_offset = max(0, min(scroll_offset - event.y * scroll_speed * 2.0, max(0, webtoon_renderer.total_height - screen_height)))
-                    elif mode == 'manga':
-                        if event.y > 0: manga_renderer.prev_page()
-                        elif event.y < 0: manga_renderer.next_page()
+                    thumbnail_result = thumbnail_viewer.handle_event(event)
+                    if thumbnail_result == "consumed":
+                        continue
+                    elif thumbnail_result is not None and isinstance(thumbnail_result, int):
+                        if mode == 'webtoon':
+                            if thumbnail_result - 1 < len(webtoon_renderer.image_positions):
+                                scroll_offset = webtoon_renderer.image_positions[thumbnail_result - 1]
+                                current_page = thumbnail_result
+                        else:
+                            manga_renderer.go_to_page(thumbnail_result - 1)
+                            current_page = thumbnail_result
+                    else:
+                        if mode == 'webtoon':
+                            scroll_speed = calculate_scroll_speed(zoom)
+                            scroll_offset = max(0, min(scroll_offset - event.y * scroll_speed * 2.0, max(0, webtoon_renderer.total_height - screen_height)))
+                        elif mode == 'manga':
+                            if event.y > 0: manga_renderer.prev_page()
+                            elif event.y < 0: manga_renderer.next_page()
                 if mode_button.handle_event(event):
                     if mode == 'webtoon':
                         mode = 'manga'
@@ -623,24 +846,33 @@ def main(archive_path, start_page=1):
                     play_button.text = "Stop" if is_scrolling else "Play"
                 if mode == 'webtoon':
                     speed_slider.handle_event(event)
-
+                page_selected = thumbnail_viewer.handle_event(event)
+                if page_selected is not None:
+                    if mode == 'webtoon':
+                        if page_selected - 1 < len(webtoon_renderer.image_positions):
+                            scroll_offset = webtoon_renderer.image_positions[page_selected - 1]
+                            current_page = page_selected
+                    else:
+                        manga_renderer.go_to_page(page_selected - 1)
+                        current_page = page_selected
             keys = pygame.key.get_pressed()
-            if mode == 'webtoon':
-                scroll_speed = calculate_scroll_speed(zoom) // 3
-                if keys[pygame.K_DOWN] or keys[pygame.K_s] or keys[pygame.K_SPACE]:
-                    scroll_offset = min(scroll_offset + scroll_speed, max(0, webtoon_renderer.total_height - screen_height))
-                elif keys[pygame.K_UP] or keys[pygame.K_w]:
-                    scroll_offset = max(0, scroll_offset - scroll_speed)
-                if is_scrolling:
-                    play_speed = speed_slider.value
-                    scroll_offset = min(scroll_offset + play_speed * delta_time, max(0, webtoon_renderer.total_height - screen_height))
-            elif mode == 'manga':
-                if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-                    manga_renderer.next_page()
-                elif keys[pygame.K_UP] or keys[pygame.K_w]:
-                    manga_renderer.prev_page()
+            if not thumbnail_viewer.visible:
+                if mode == 'webtoon':
+                    scroll_speed = calculate_scroll_speed(zoom) // 3
+                    if keys[pygame.K_DOWN] or keys[pygame.K_s] or keys[pygame.K_SPACE]:
+                        scroll_offset = min(scroll_offset + scroll_speed, max(0, webtoon_renderer.total_height - screen_height))
+                    elif keys[pygame.K_UP] or keys[pygame.K_w]:
+                        scroll_offset = max(0, scroll_offset - scroll_speed)
+                    if is_scrolling:
+                        play_speed = speed_slider.value
+                        scroll_offset = min(scroll_offset + play_speed * delta_time, max(0, webtoon_renderer.total_height - screen_height))
+                elif mode == 'manga':
+                    if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                        manga_renderer.next_page()
+                    elif keys[pygame.K_UP] or keys[pygame.K_w]:
+                        manga_renderer.prev_page()
 
-            screen.fill((20, 20, 20))
+            screen.fill(colors["background"])
             if mode == 'webtoon':
                 vis = webtoon_renderer.render(screen, scroll_offset)
                 current_page = webtoon_renderer.page_from_offset(scroll_offset)
@@ -652,19 +884,18 @@ def main(archive_path, start_page=1):
                 total_pages = len(images)
                 progress = manga_renderer.current_page / max(1, len(images)-1) if len(images) > 1 else 1.0
 
-            # Sauvegarde progression
             progress_mgr.save(manga_name, chapter_number, current_page, total_pages)
-            text = font.render(f"{Path(archive_path).stem}", True, (255, 255, 255))
+            text = font.render(f"{Path(archive_path).stem}", True, colors["foreground"])
             screen.blit(text, (10, 10))
             mode_button.draw(screen)
             if mode == 'webtoon':
                 play_button.draw(screen)
                 speed_slider.draw(screen)
             progress_bar.draw(screen, progress, current_page, total_pages)
+            thumbnail_viewer.draw(screen, current_page)
             pygame.display.flip()
             clock.tick(60)
 
-        # Dernière sauvegarde
         progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
         cleanup()
     except Exception as e:
