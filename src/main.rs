@@ -1,30 +1,32 @@
 mod app;
 mod config;
 mod event;
+mod image;
 mod manga;
+mod manga_indexer;
 mod theme;
 mod ui;
 mod util;
-mod image;
 
+use env_logger;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
+
 use anyhow::{Context, Result};
+use app::App;
 use clap::Parser;
 use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use ratatui::{prelude::*, Terminal};
-use log::{debug, info};
 use env_logger::Builder;
+use event::Event as AppEvent;
+use log::{debug, info};
+use ratatui::{prelude::*, Terminal};
 use std::fs::OpenOptions;
 use std::io::Write;
-
-use app::App;
-use event::Event as AppEvent;
 
 #[derive(Parser, Debug)]
 #[clap(author, version)]
@@ -47,7 +49,14 @@ fn main() -> Result<()> {
         .context("Failed to open log file")?;
 
     Builder::new()
-        .filter(None, if args.debug { log::LevelFilter::Debug } else { log::LevelFilter::Info })
+        .filter(
+            None,
+            if args.debug {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            },
+        )
         .format(|buf, record| {
             use chrono::Local;
             writeln!(
@@ -62,6 +71,7 @@ fn main() -> Result<()> {
         .init();
 
     info!("Démarrage de l'application manga reader");
+    manga_indexer::open_db().context("Failed to initialize SQLite database")?;
 
     let manga_dir = PathBuf::from(shellexpand::tilde(&args.manga_dir).to_string());
     run(manga_dir)
@@ -94,10 +104,22 @@ fn run(manga_dir: PathBuf) -> Result<()> {
                 foreground: Color::White,
                 cursor: Color::White,
                 colors: [
-                    Color::Black, Color::Red, Color::Green, Color::Yellow,
-                    Color::Blue, Color::Magenta, Color::Cyan, Color::Gray,
-                    Color::DarkGray, Color::LightRed, Color::LightGreen, Color::LightYellow,
-                    Color::LightBlue, Color::LightMagenta, Color::LightCyan, Color::White,
+                    Color::Black,
+                    Color::Red,
+                    Color::Green,
+                    Color::Yellow,
+                    Color::Blue,
+                    Color::Magenta,
+                    Color::Cyan,
+                    Color::Gray,
+                    Color::DarkGray,
+                    Color::LightRed,
+                    Color::LightGreen,
+                    Color::LightYellow,
+                    Color::LightBlue,
+                    Color::LightMagenta,
+                    Color::LightCyan,
+                    Color::White,
                 ],
             }
         }
@@ -105,13 +127,14 @@ fn run(manga_dir: PathBuf) -> Result<()> {
 
     // Charger la configuration
     let config = config::Config::load()?;
-    let manga_dir = if manga_dir != PathBuf::from(shellexpand::tilde("~/Documents/Scan").to_string()) {
-        manga_dir
-    } else if let Some(last_dir) = config.last_manga_dir {
-        last_dir
-    } else {
-        manga_dir
-    };
+    let manga_dir =
+        if manga_dir != PathBuf::from(shellexpand::tilde("~/Documents/Scan").to_string()) {
+            manga_dir
+        } else if let Some(last_dir) = config.last_manga_dir {
+            last_dir
+        } else {
+            manga_dir
+        };
 
     // Créer l'état de l'application
     let mut app = App::new(manga_dir, theme)?;
@@ -152,6 +175,7 @@ fn run(manga_dir: PathBuf) -> Result<()> {
                     app.reset_refresh();
                 }
             }
+            AppEvent::None => {}
         }
     }
 

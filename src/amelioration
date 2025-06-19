@@ -1,0 +1,11 @@
+Ce qui pourrait être fait “plus tard” (non urgent)
+
+    DRY/Helpers dans la UI pour éviter les répétitions (barres, styles, layouts…).
+
+    Module image à enrichir (gestion cache, gestion thumbnails multiples, conversion couleurs…).
+
+    Thèmes dynamiques ou presets côté utilisateur.
+
+    Tests unitaires pour la logique non-UI.
+
+    Support pour d’autres formats (epub, etc.), plugins, scripts custom…

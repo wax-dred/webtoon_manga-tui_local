@@ -16,6 +16,8 @@ pub enum Event {
     Resize(u16, u16),
     /// Mouse event
     Mouse(MouseEvent),
+    #[allow(dead_code)]
+    None,
 }
 
 /// Event handler

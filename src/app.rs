@@ -16,6 +16,14 @@ use crate::theme::Theme;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::StatefulProtocol;
 use crate::event::Event;
+use ratatui::layout::Rect;
+use std::sync::{Arc, Mutex};
+use walkdir::WalkDir;
+use std::fs;
+use rusqlite::OptionalExtension;
+use std::time::{UNIX_EPOCH};
+use crate::manga_indexer::{open_db, scan_and_index};
+use std::fs::metadata;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum InputField {
@@ -69,7 +77,15 @@ pub struct App {
     pub last_download_complete: bool,
     pub should_quit: bool,
     pub last_mouse_scroll: Instant,
-    pub image_cache: HashMap<PathBuf, (u32, u32, DynamicImage)>,
+    pub image_cache: HashMap<PathBuf, (u32, u32, DynamicImage, u64)>, // Un seul champ avec 4 éléments
+    pub source_link_area: Option<Rect>,
+    #[allow(dead_code)]
+    pub image_load_sender: crossbeam_channel::Sender<(usize, Option<PathBuf>)>,
+    #[allow(dead_code)]
+    pub image_load_receiver: crossbeam_channel::Receiver<(usize, Option<(u32, u32, DynamicImage)>)>,
+    pub pending_image_load: Option<usize>,
+    #[allow(dead_code)]
+    pub last_cover_load: Instant,
 }
 
 impl App {
@@ -90,6 +106,28 @@ impl App {
             .map(|c| c.to_string())
             .collect::<Vec<String>>()
             .join(",");
+
+        // Créer les canaux pour le chargement asynchrone des images
+        let (tx, rx) = crossbeam_channel::bounded(10);
+        let (result_tx, result_rx) = crossbeam_channel::bounded(10);
+
+        // Lancer un thread pour traiter les demandes de chargement
+        thread::spawn(move || {
+            while let Ok((manga_idx, path)) = rx.recv() {
+                let result = if let Some(path) = path {
+                    match crate::util::load_image_info(&path) {
+                        Ok((width, height, img)) => Some((width, height, img)),
+                        Err(e) => {
+                            debug!("Failed to load image for manga {}: {:?}", manga_idx, e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let _ = result_tx.send((manga_idx, result));
+            }
+        });
 
         let mut app = Self {
             state: AppState::BrowseManga,
@@ -127,6 +165,11 @@ impl App {
             should_quit: false,
             last_mouse_scroll: Instant::now().checked_sub(Duration::from_millis(120)).unwrap_or_else(Instant::now),
             image_cache: HashMap::new(),
+            source_link_area: None,
+            image_load_sender: tx,
+            image_load_receiver: result_rx,
+            pending_image_load: None,
+            last_cover_load: Instant::now(),
         };
         
         app.refresh_manga_list()?;
@@ -135,43 +178,169 @@ impl App {
     }
     
     pub fn load_cover_image(&mut self) -> Result<()> {
-        let thumbnail_path = self
+        let current_selected_manga = self.selected_manga;
+        let thumbnail_path_str = self
             .selected_manga
             .and_then(|idx| self.mangas.get(idx))
             .and_then(|manga| manga.thumbnail.as_ref());
-
-        self.image_manager.clear();
-
-        if let Some(path) = thumbnail_path {
-            if let Some(cached) = self.image_cache.get(path) {
-                self.image_manager.image_info = Some(cached.clone());
-            } else {
-                if let Ok((width, height, img)) = crate::util::load_image_info(path) {
-                    self.image_cache.insert(path.to_path_buf(), (width, height, img.clone()));
-                    self.image_manager.image_info = Some((width, height, img));
+        debug!("Loading cover for manga index: {:?}, thumbnail path: {:?}", current_selected_manga, thumbnail_path_str);
+    
+        let thumbnail_path = thumbnail_path_str.map(PathBuf::from);
+        debug!("Thumbnail path converted: {:?}", thumbnail_path);
+    
+        // Vérifier si l'image est en cache et valide
+        if let Some(path) = thumbnail_path.as_ref() {
+            if let Some(&(width, height, ref img, modified)) = self.image_cache.get(path) {
+                if let Ok(meta) = metadata(path) {
+                    let current_modified = meta.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
+                    if current_modified <= modified {
+                        debug!("Using cached image: {:?}", path);
+                        self.image_manager.image_info = Some((width, height, img.clone()));
+                        if self.selected_manga == current_selected_manga {
+                            self.image_state = Some(self.image_picker.new_resize_protocol(img.clone()));
+                        }
+                        return Ok(());
+                    } else {
+                        debug!("Cached image outdated for {:?}", path);
+                        self.image_cache.remove(path);
+                    }
                 }
             }
         }
-
-        if let Some((_, _, dyn_img)) = &self.image_manager.image_info {
-            self.image_state = Some(self.image_picker.new_resize_protocol(dyn_img.clone()));
+    
+        self.image_manager.clear();
+        debug!("Image manager cleared");
+    
+        if let Some(path) = thumbnail_path.as_ref() {
+            match crate::util::load_image_info(path) {
+                Ok((width, height, img)) => {
+                    debug!("Loaded new image: {}x{}", width, height);
+                    let modified = metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
+                    self.image_cache.insert(path.to_path_buf(), (width, height, img.clone(), modified));
+                    self.image_manager.image_info = Some((width, height, img.clone()));
+    
+                    // Vérification des dimensions avant de créer le protocol
+                    if width > 0 && height > 0 {
+                        if self.selected_manga == current_selected_manga {
+                            self.image_state = Some(self.image_picker.new_resize_protocol(img));
+                        }
+                    } else {
+                        debug!("Invalid image dimensions: {}x{}", width, height);
+                        self.image_state = None;
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to load image: {:?}", e);
+                    self.image_manager.image_info = None;
+                    self.image_state = None;
+                }
+            }
         } else {
+            debug!("No thumbnail path provided");
+            self.image_manager.image_info = None;
             self.image_state = None;
         }
-
+    
+        if self.selected_manga != current_selected_manga {
+            debug!("Selected manga changed during load (was {:?}, now {:?}), aborting image state update", current_selected_manga, self.selected_manga);
+        }
+    
         Ok(())
     }
+    
 
     pub fn refresh_manga_list(&mut self) -> Result<()> {
         debug!("Refreshing manga list from {:?}", self.manga_dir);
-        
+        let start = Instant::now();
+    
+        // Open the database with Arc<Mutex> for thread safety
+        let db = Arc::new(Mutex::new(open_db()?));
+        debug!("Database opened for refresh");
+    
+        // Récupérer la dernière heure de scan de manière sécurisée
+        let last_scan_time = {
+            let conn = db.lock().map_err(|e| anyhow::anyhow!("Failed to lock database: {}", e))?;
+            conn.query_row(
+                "SELECT value FROM metadata WHERE key = 'last_scan_time'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .unwrap_or(None)
+        };
+        debug!("Last scan time: {:?}", last_scan_time);
+    
+        // Vérifier si un scan est nécessaire dans un thread séparé pour éviter de bloquer l'UI
+        let need_scan = if last_scan_time.is_none() {
+            true
+        } else {
+            let manga_dir = self.manga_dir.clone();
+            let handle = thread::spawn(move || {
+                let mut needs_scan = false;
+                for entry in WalkDir::new(&manga_dir).into_iter().filter_map(|e| e.ok()) {
+                    if entry.file_type().is_file() {
+                        if let Ok(metadata) = fs::metadata(entry.path()) {
+                            if let Ok(modified) = metadata.modified() {
+                                let modified_secs = modified
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or(Duration::from_secs(0))
+                                    .as_secs() as i64;
+                                if modified_secs > last_scan_time.unwrap_or(0) {
+                                    needs_scan = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                needs_scan
+            });
+            handle.join().map_err(|e| anyhow::anyhow!("Thread join failed: {:?}", e))?
+        };
+        debug!("Need scan: {}", need_scan);
+    
+        if !need_scan {
+            debug!("No changes detected, loading from database");
+            let conn = db.lock().map_err(|e| anyhow::anyhow!("Failed to lock database: {}", e))?;
+            self.mangas = Manga::load_all_from_db(&conn, &self.config)?;
+            debug!("Loaded {} mangas from SQLite", self.mangas.len());
+            self.status = format!("Loaded {} mangas from SQLite (no rescan needed)", self.mangas.len());
+            self.needs_refresh = true;
+            self.restore_selection();
+            self.load_cover_image()?;
+            return Ok(());
+        }
+    
+        // Effectuer un scan complet dans un thread séparé
+        {
+            let db_clone = Arc::clone(&db);
+            let manga_dir = self.manga_dir.clone();
+            let handle = thread::spawn(move || {
+                let conn = db_clone.lock().map_err(|e| anyhow::anyhow!("Failed to lock database: {}", e))?;
+                scan_and_index(&conn, &manga_dir)
+            });
+            handle.join().map_err(|e| anyhow::anyhow!("Thread join failed: {:?}", e))??;
+        }
+    
+        // Charger les mangas depuis la base de données
+        let conn = db.lock().map_err(|e| anyhow::anyhow!("Failed to lock database: {}", e))?;
+        self.mangas = Manga::load_all_from_db(&conn, &self.config)?;
+        debug!("Manga scanning took {:?}", start.elapsed());
+        self.status = format!("Loaded {} mangas from SQLite database", self.mangas.len());
+        self.needs_refresh = true;
+        self.restore_selection();
+        self.load_cover_image()?;
+        Ok(())
+    }
+    
+    
+    // Une petite fonction pour restaurer la sélection après le chargement
+    fn restore_selection(&mut self) {
         let previous_selected_manga = self.selected_manga;
         let previous_selected_manga_name = previous_selected_manga
             .and_then(|idx| self.mangas.get(idx))
             .map(|manga| manga.name.clone());
     
-        self.mangas = Manga::scan_directory(&self.manga_dir, &self.config)?;
-        
         if let Some(manga_name) = previous_selected_manga_name {
             self.selected_manga = self.mangas.iter().position(|m| m.name == manga_name);
         } else {
@@ -179,23 +348,25 @@ impl App {
         }
     
         if let Some(manga_idx) = self.selected_manga {
-            if let Some(manga) = self.mangas.get(manga_idx) {
+            if let Some(manga) = self.mangas.get_mut(manga_idx) {
+                manga.load_progress_lazy();
                 let last_unread = manga.chapters.iter().position(|c| !c.read);
                 self.selected_chapter = match last_unread {
                     Some(idx) => Some(idx),
                     None => Some(0),
                 };
-                debug!("Restored selected_manga: {:?}, selected_chapter: {:?}", self.selected_manga, self.selected_chapter);
+                debug!(
+                    "Restored selected_manga: {:?}, selected_chapter: {:?}",
+                    self.selected_manga, self.selected_chapter
+                );
             } else {
                 self.selected_chapter = None;
             }
         } else {
             self.selected_chapter = None;
         }
-    
-        self.load_cover_image()?;
-        Ok(())
     }
+    
 
     pub fn current_manga(&self) -> Option<&Manga> {
         self.selected_manga
@@ -212,27 +383,27 @@ impl App {
     }
 
     pub fn toggle_chapter_read_state(&mut self, read: bool) -> Result<()> {
-        if let Some(chapter) = self.current_chapter() {
-            let path = chapter.path.clone();
-            let manga_name = self.current_manga().map(|m| m.name.clone()).unwrap_or_default();
-            if read {
-                self.config.mark_chapter_as_read(&path)?;
-            } else {
-                self.config.mark_chapter_as_unread(&path)?;
-            }
-            if let (Some(manga_idx), Some(chapter_idx)) = (self.selected_manga, self.selected_chapter) {
-                if let Some(manga) = self.mangas.get_mut(manga_idx) {
-                    if let Some(chapter) = manga.chapters.get_mut(chapter_idx) {
-                        chapter.read = read;
-                        let last_page = chapter.last_page_read.unwrap_or(0);
-                        let total_pages = chapter.full_pages_read.unwrap_or(20);
-                        chapter.update_progress(&manga_name, last_page, total_pages, read)?;
-                        self.status = if read {
-                            "Chapitre marqué comme lu".to_string()
-                        } else {
-                            "Chapitre marqué comme non lu".to_string()
-                        };
+        if let (Some(manga_idx), Some(chapter_idx)) = (self.selected_manga, self.selected_chapter) {
+            if let Some(manga) = self.mangas.get_mut(manga_idx) {
+                if let Some(chapter) = manga.chapters.get_mut(chapter_idx) {
+                    let path = chapter.path.clone();
+                    let manga_name = manga.name.clone();
+                    if read {
+                        self.config.mark_chapter_as_read(&path)?;
+                    } else {
+                        self.config.mark_chapter_as_unread(&path)?;
+                        // Réinitialiser last_page_read à None quand le chapitre devient non lu
+                        chapter.last_page_read = None;
                     }
+                    chapter.read = read;
+                    let last_page = chapter.last_page_read.unwrap_or(0); // Utilise 0 si None
+                    let total_pages = chapter.full_pages_read.unwrap_or(20);
+                    chapter.update_progress(&manga_name, last_page, total_pages, read)?;
+                    self.status = if read {
+                        "Chapitre marqué comme lu".to_string()
+                    } else {
+                        "Chapitre marqué comme non lu (progression réinitialisée)".to_string()
+                    };
                 }
             }
         }
@@ -850,7 +1021,47 @@ impl App {
                     }
                     return false;
                 }
-                KeyCode::Enter | KeyCode::Char('o') => {
+                KeyCode::Enter => {
+                    if !self.is_manga_list_focused {
+                        if let Err(e) = self.open_external() {
+                            self.status = format!("Erreur: {}", e);
+                        } else {
+                            self.status = "Chapter opened".to_string();
+                        }
+                    }
+                    if self.is_manga_list_focused {
+                        self.is_manga_list_focused = false;
+                        self.status = "Focus: Chapter List".to_string();
+                        if let Some(manga) = self.current_manga() {
+                            let last_read_index = manga.chapters.iter().rposition(|c| c.read);
+                            self.selected_chapter = match last_read_index {
+                                Some(idx) => {
+                                    if idx + 1 < manga.chapters.len() {
+                                        Some(idx + 1)
+                                    } else if idx > 0 {
+                                        Some(idx - 1)
+                                    } else {
+                                        Some(0)
+                                    }
+                                }
+                                None => Some(0),
+                            };
+                            debug!("Selected chapter with Enter: {:?}", self.selected_chapter);
+                        }
+                        
+                    }
+                    return false;
+                }
+                KeyCode::Backspace => {
+                    if !self.is_manga_list_focused {
+                        self.is_manga_list_focused = true;
+                        self.status = "Focus: Manga List".to_string();
+                        self.selected_chapter = None; // Réinitialise la sélection du chapitre
+                        debug!("Returned to Manga List with Backspace");
+                    }
+                    return false;
+                }
+                KeyCode::Char('o') => {
                     if !self.is_manga_list_focused {
                         if let Err(e) = self.open_external() {
                             self.status = format!("Erreur: {}", e);
@@ -913,6 +1124,70 @@ impl App {
             },
     
             Event::Mouse(mouse_event) => match mouse_event.kind {
+                MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                    if let Some(link_area) = self.source_link_area {
+                        if link_area.contains(ratatui::layout::Position {
+                            x: mouse_event.column,
+                            y: mouse_event.row,
+                        }) {
+                            let url = self.current_manga().and_then(|manga| manga.source_url.clone());
+                            if let Some(url) = url {
+                                self.state = AppState::DownloadInput;
+                                self.input_mode = true;
+                                self.input_field = InputField::Url;
+                                self.download_url = url.clone();
+                                self.status = "URL filled from source. Press Tab to select chapters.".to_string();
+                                debug!("Clicked source link, switched to DownloadInput with URL: {}", url);
+                                return false;
+                            }
+                        }
+                    }
+                    false
+                }
+                MouseEventKind::Down(crossterm::event::MouseButton::Right) => {
+                    if let Some(link_area) = self.source_link_area {
+                        if link_area.contains(ratatui::layout::Position {
+                            x: mouse_event.column,
+                            y: mouse_event.row,
+                        }) {
+                            debug!("Right-click detected in source link area at ({}, {})", mouse_event.column, mouse_event.row);
+                            let url = self.current_manga().and_then(|manga| manga.source_url.clone());
+                            if let Some(url) = url {
+                                // Lancer la commande pour ouvrir l'URL dans le navigateur
+                                let command = if cfg!(target_os = "windows") {
+                                    "start"
+                                } else if cfg!(target_os = "macos") {
+                                    "open"
+                                } else {
+                                    "xdg-open"
+                                };
+                                debug!("Opening URL '{}' with command '{}'", url, command);
+                                match Command::new(command)
+                                    .arg(&url)
+                                    .stdout(Stdio::null())
+                                    .stderr(Stdio::null())
+                                    .spawn()
+                                {
+                                    Ok(_) => {
+                                        self.status = format!("Opened {} in default browser", url);
+                                        debug!("Successfully spawned browser command for URL: {}", url);
+                                    }
+                                    Err(e) => {
+                                        self.status = format!("Failed to open browser: {}", e);
+                                        error!("Failed to spawn browser command: {}", e);
+                                    }
+                                }
+                                return false;
+                            } else {
+                                debug!("No source URL available for right-click");
+                                self.status = "No source URL available".to_string();
+                                return false;
+                            }
+                        }
+                    }
+                    debug!("Right-click outside source link area at ({}, {})", mouse_event.column, mouse_event.row);
+                    false
+                }
                 MouseEventKind::ScrollDown => {
                     let now = Instant::now();
                     debug!("Mouse ScrollDown detected, time since last: {:?}", now.duration_since(self.last_mouse_scroll));
@@ -1038,7 +1313,7 @@ impl App {
                 self.status = "Returned to manga list".to_string();
                 return false;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Char('k') => {
                 if let Some(manga) = self.current_manga() {
                     if !manga.chapters.is_empty() {
                         self.selected_chapter = Some(match self.selected_chapter {
@@ -1050,7 +1325,7 @@ impl App {
                 }
                 return false;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Char('j') => {
                 if let Some(manga) = self.current_manga() {
                     if !manga.chapters.is_empty() {
                         self.selected_chapter = Some(match self.selected_chapter {
@@ -1112,7 +1387,7 @@ impl App {
                 self.status = "Enter the URL, then press Tab to select chapters.".to_string();
                 return false;
             }
-            _ => return false,
+            _ => false,
         }
     }
 

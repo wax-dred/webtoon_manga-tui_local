@@ -1,22 +1,22 @@
+use log::debug;
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect, Margin},
-    style::{Modifier, Style, Color},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, Scrollbar, ScrollbarOrientation},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap},
     Frame,
 };
 use ratatui_image::StatefulImage;
-use log::debug;
 use std::cmp;
 use std::path::PathBuf;
 
 use crate::app::{App, AppState, InputField};
-use crate::util;
 use crate::manga::Manga;
+use crate::util;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -25,7 +25,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Length(1),
         ])
         .split(area);
-    
+
     let title = format!(" Manga Reader ");
     let title = Paragraph::new(title)
         .style(Style::default().fg(app.theme.foreground))
@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         )
         .alignment(Alignment::Center);
     f.render_widget(title, chunks[0]);
-    
+
     match app.state {
         AppState::BrowseManga | AppState::DownloadInput | AppState::Downloading => {
             draw_browse(f, app, chunks[1])
@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         AppState::ViewMangaDetails => draw_details(f, app, chunks[1]),
         AppState::Settings => draw_settings(f, app, chunks[1]),
     };
-    
+
     let status = format!(" {} ", app.status);
     let status = Paragraph::new(status)
         .style(Style::default().fg(app.theme.foreground))
@@ -57,20 +57,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         );
     let status_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(70),
-            Constraint::Percentage(30),
-        ])
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(chunks[2]);
-    
+
     f.render_widget(status, status_chunks[0]);
-    
+
     let keys = match app.state {
         AppState::BrowseManga => {
             if app.is_manga_list_focused {
-                "Tab:Focus Chapters j/k:Nav r:Refresh c:Config d:Download ?:Help"
+                "Enter:Focus Chapters j/k:Nav r:Refresh c:Config d:Download ?:Help"
             } else {
-                "Tab:Focus Manga j/k:Nav Enter:Read o:Open m:Mark ?:Help"
+                "Backspace:Back Tab:Focus Manga j/k:Nav Enter:Read o:Open m:Mark ?:Help"
             }
         }
         AppState::ViewMangaDetails => "j/k:Nav Enter:Open o:Open m:Mark d:Download Esc:Back",
@@ -78,20 +75,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         AppState::DownloadInput => "Tab:Switch Field Enter:Download Esc:Cancel",
         AppState::Downloading => "Esc:Cancel r:Refresh j/k:Scroll",
     };
-    
+
     let keys_widget = Paragraph::new(keys)
         .style(Style::default().fg(app.theme.colors[2]))
         .alignment(Alignment::Right)
         .block(Block::default().borders(Borders::NONE));
-    
+
     f.render_widget(keys_widget, status_chunks[1]);
-    
+
     if app.show_help {
         draw_help_overlay(f, app, area);
     }
 }
 
-fn render_cover_image(f: &mut Frame, app: &mut App, cover_area: Rect, thumbnail_path: Option<&PathBuf>) {
+fn render_cover_image(
+    f: &mut Frame,
+    app: &mut App,
+    cover_area: Rect,
+    thumbnail_path: Option<&PathBuf>,
+) {
     let cover_block = Block::default()
         .title(" Cover ")
         .borders(Borders::ALL)
@@ -100,18 +102,27 @@ fn render_cover_image(f: &mut Frame, app: &mut App, cover_area: Rect, thumbnail_
     let inner_area = cover_block.inner(cover_area);
 
     if app.config.settings.enable_image_rendering {
-        debug!("Cover area dimensions: width={}, height={}", inner_area.width, inner_area.height);
+        debug!(
+            "Cover area dimensions: width={}, height={}",
+            inner_area.width, inner_area.height
+        );
         if let Some(state) = &mut app.image_state {
             let image_widget = StatefulImage::new(None);
             f.render_stateful_widget(image_widget, inner_area, state);
-        } else if let Some(thumb_path) = thumbnail_path {
-            let ascii_width = cmp::min(100, inner_area.width as u32);
-            let placeholder = match util::image_to_ascii(thumb_path, ascii_width) {
-                Ok(ascii) => ascii,
-                Err(e) => {
-                    debug!("Failed to generate ASCII: {}", e);
-                    "No cover image available".to_string()
+        } else {
+            let placeholder = if app.pending_image_load.is_some() {
+                "Loading cover...".to_string()
+            } else if let Some(thumb_path) = thumbnail_path {
+                let ascii_width = cmp::min(100, inner_area.width as u32);
+                match util::image_to_ascii(thumb_path, ascii_width) {
+                    Ok(ascii) => ascii,
+                    Err(e) => {
+                        debug!("Failed to generate ASCII: {}", e);
+                        "No cover image available".to_string()
+                    }
                 }
+            } else {
+                "No cover image available".to_string()
             };
             let image_text = Text::from(placeholder);
             let image_paragraph = Paragraph::new(image_text)
@@ -161,22 +172,28 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
             )]);
 
             ListItem::new(vec![
-                Line::from(vec![Span::styled(title, Style::default().fg(app.theme.foreground))]),
+                Line::from(vec![Span::styled(
+                    title,
+                    Style::default().fg(app.theme.foreground),
+                )]),
                 Line::from(vec![
-                    Span::styled(format!("{:.0}% ", progress * 100.0), Style::default().fg(if progress < 0.1 {
-                        app.theme.colors[1]
-                    } else if progress < 0.25 {
-                        app.theme.colors[3]
-                    } else if progress < 0.5 {
-                        app.theme.colors[5]
-                    } else if progress < 0.75 {
-                        app.theme.colors[11]
-                    } else {
-                        app.theme.colors[13]
-                    })),
                     Span::styled(
-                        format!("- {} chapters", manga.chapters.len()),
-                        Style::default().fg(app.theme.colors[11]),
+                        format!("  {:.0}% ", progress * 100.0),
+                        Style::default().fg(if progress < 0.1 {
+                            app.theme.colors[2]
+                        } else if progress < 0.25 {
+                            app.theme.colors[3]
+                        } else if progress < 0.5 {
+                            app.theme.colors[5]
+                        } else if progress < 0.75 {
+                            app.theme.colors[11]
+                        } else {
+                            app.theme.colors[13]
+                        }),
+                    ),
+                    Span::styled(
+                        format!("━ {} chapters", manga.chapters.len()),
+                        Style::default().fg(app.theme.colors[12]),
                     ),
                 ]),
                 progress_bar_line,
@@ -187,15 +204,13 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
     let manga_list = List::new(items)
         .block(
             Block::default()
-                .title(" Manga List ")
+                .title(" Manga / Webtoon List ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(
-                    if app.is_manga_list_focused {
-                        app.theme.colors[13]
-                    } else {
-                        app.theme.colors[9]
-                    },
-                )),
+                .border_style(Style::default().fg(if app.is_manga_list_focused {
+                    app.theme.colors[12]
+                } else {
+                    app.theme.colors[9]
+                })),
         )
         .highlight_style(
             Style::default()
@@ -218,16 +233,36 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
         let items: Vec<ListItem> = manga
             .chapters
             .iter()
-            .map(|chapter| {
-                let mut style = Style::default().fg(app.theme.foreground);
-                let mut prefix = "☐ ";
-                if chapter.read {
-                    style = Style::default().fg(app.theme.colors[13]);
-                    prefix = "✓ ";
-                } else if chapter.last_page_read.is_some() {
-                    style = Style::default().fg(app.theme.colors[12]);
-                    prefix = "▶ ";
-                }
+            .enumerate()
+            .map(|(idx, chapter)| {
+                debug!(
+                    "Chapter {}: read={}, last_page_read={:?}, full_pages_read={:?}",
+                    idx, chapter.read, chapter.last_page_read, chapter.full_pages_read
+                );
+                let (style, prefix) = {
+                    match (chapter.read, chapter.last_page_read, chapter.full_pages_read) {
+                        (true, _, _) => (
+                            Style::default().fg(app.theme.colors[13]),
+                            "✓ ",
+                        ),
+                        (false, Some(last), Some(total)) if last > 0 && last < total => (
+                            Style::default().fg(app.theme.colors[12]),
+                            "▶ ",
+                        ),
+                        (false, None, _) | (false, Some(0), _) => (
+                            Style::default().fg(app.theme.colors[11]),
+                            "☐ ",
+                        ),
+                        (false, Some(last), Some(total)) if last >= total => (
+                            Style::default().fg(app.theme.colors[13]),
+                            "✓ ",
+                        ),
+                        _ => (
+                            Style::default().fg(app.theme.colors[11]),
+                            "☐ ",
+                        ),
+                    }
+                };
                 ListItem::new(vec![
                     Line::from(vec![Span::styled(
                         format!("{}{} - {}", prefix, chapter.number_display(), chapter.title),
@@ -237,12 +272,11 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
                         format!(
                             "   {}{}",
                             chapter.size_display(),
-                            chapter.last_page_read.map_or(String::new(), |page| {
-                                chapter.full_pages_read.map_or(
-                                    format!(" - Page {}", page),
-                                    |total| format!(" - Page {} / {}", page, total)
-                                )
-                            })
+                            match (chapter.last_page_read, chapter.full_pages_read) {
+                                (Some(page), Some(total)) => format!(" - Page {} / {}", page, total),
+                                (Some(page), None) => format!(" - Page {}", page),
+                                _ => String::new(),
+                            }
                         ),
                         Style::default().fg(app.theme.colors[11]),
                     )]),
@@ -253,15 +287,17 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
         let chapter_list = List::new(items)
             .block(
                 Block::default()
-                    .title(format!(" {} - Chapters ", display_name))
+                    .title(format!(
+                        " {} - Chapters {} ",
+                        display_name,
+                        manga.chapters.len()
+                    ))
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(
-                        if !app.is_manga_list_focused {
-                            app.theme.colors[2]
-                        } else {
-                            app.theme.colors[14]
-                        },
-                    )),
+                    .border_style(Style::default().fg(if !app.is_manga_list_focused {
+                        app.theme.colors[12]
+                    } else {
+                        app.theme.colors[14]
+                    })),
             )
             .highlight_style(
                 Style::default()
@@ -294,30 +330,39 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
 
     let manga_info_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ])
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
         .split(chunks[2]);
 
     let cover_synopsis_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(manga_info_chunks[0]);
 
-    let (thumbnail_path, synopsis) = match app.current_manga() {
+    let (thumbnail_path, synopsis, source_url) = match app.current_manga() {
         Some(manga) => (
             manga.thumbnail.clone(),
-            manga.synopsis.as_ref().unwrap_or(&"No synopsis available.".to_string()).clone(),
+            manga
+                .synopsis
+                .as_ref()
+                .unwrap_or(&"No synopsis available.".to_string())
+                .clone(),
+            manga.source_url.clone(),
         ),
-        None => (None, "No manga selected.".to_string()),
+        None => (None, "No manga selected.".to_string(), None),
     };
 
     render_cover_image(f, app, cover_synopsis_chunks[0], thumbnail_path.as_ref());
 
+    // Diviser cover_synopsis_chunks[1] en deux parties verticales : une pour le synopsis, une pour le lien
+    let synopsis_link_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(90), // Réduit légèrement pour donner plus d'espace au lien
+            Constraint::Percentage(10), // Plus d'espace pour le lien
+        ])
+        .split(cover_synopsis_chunks[1]);
+
+    // Ajouter un widget pour le synopsis
     let synopsis_widget = Paragraph::new(synopsis)
         .block(
             Block::default()
@@ -327,7 +372,24 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
         )
         .style(Style::default().fg(app.theme.foreground))
         .wrap(Wrap { trim: true });
-    f.render_widget(synopsis_widget, cover_synopsis_chunks[1]);
+    f.render_widget(synopsis_widget, synopsis_link_chunks[0]);
+
+    // Ajouter le widget pour le lien source sous le synopsis
+    let source_text = source_url.unwrap_or("No source available.".to_string());
+    let source_widget = Paragraph::new(source_text.clone())
+        .style(
+            Style::default()
+                .fg(app.theme.colors[13])
+                .add_modifier(Modifier::UNDERLINED), // Style pour indiquer un lien cliquable
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.colors[13])),
+        )
+        .alignment(Alignment::Left);
+    f.render_widget(source_widget, synopsis_link_chunks[1]);
+    app.source_link_area = Some(synopsis_link_chunks[1]);
 
     if app.state == AppState::DownloadInput {
         draw_download_input(f, app, manga_info_chunks[1]);
@@ -339,29 +401,37 @@ fn draw_browse(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
-    let (thumbnail_path, synopsis) = match app.current_manga() {
+    let (thumbnail_path, synopsis, source_url) = match app.current_manga() {
         Some(manga) => (
             manga.thumbnail.clone(),
-            manga.synopsis.as_ref().unwrap_or(&"No synopsis available.".to_string()).clone(),
+            manga
+                .synopsis
+                .as_ref()
+                .unwrap_or(&"No synopsis available.".to_string())
+                .clone(),
+            manga.source_url.clone(),
         ),
-        None => (None, "No manga selected.".to_string()),
+        None => (None, "No manga selected.".to_string(), None),
     };
 
     render_cover_image(f, app, chunks[0], thumbnail_path.as_ref());
 
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(40),
-            Constraint::Percentage(60),
-        ])
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[1]);
+
+    // Diviser la zone du synopsis pour afficher le texte et le lien
+    let synopsis_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1), // Ligne pour le lien
+        ])
+        .split(right_chunks[0]);
 
     let synopsis_widget = Paragraph::new(synopsis)
         .block(
@@ -372,22 +442,59 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         )
         .style(Style::default().fg(app.theme.foreground))
         .wrap(Wrap { trim: true });
-    f.render_widget(synopsis_widget, right_chunks[0]);
+    f.render_widget(synopsis_widget, synopsis_area[0]);
+
+    // Afficher le lien source
+    let source_text = source_url.unwrap_or("No source available.".to_string());
+    let source_widget = Paragraph::new(source_text.clone())
+        .style(
+            Style::default()
+                .fg(app.theme.colors[13])
+                .add_modifier(Modifier::UNDERLINED),
+        )
+        .block(
+            Block::default()
+                .borders(Borders::NONE)
+                .border_style(Style::default().fg(app.theme.colors[11])),
+        )
+        .alignment(Alignment::Left);
+    f.render_widget(source_widget, synopsis_area[1]);
+    app.source_link_area = Some(synopsis_area[1]);
 
     if let Some(manga) = app.current_manga() {
         let items: Vec<ListItem> = manga
             .chapters
             .iter()
-            .map(|chapter| {
-                let mut style = Style::default().fg(app.theme.foreground);
-                let mut prefix = "☐ ";
-                if chapter.read {
-                    style = Style::default().fg(app.theme.colors[13]);
-                    prefix = "✓ ";
-                } else if chapter.last_page_read.is_some() {
-                    style = Style::default().fg(app.theme.colors[12]);
-                    prefix = "▶ ";
-                }
+            .enumerate()
+            .map(|(idx, chapter)| {
+                debug!(
+                    "Chapter {}: read={}, last_page_read={:?}, full_pages_read={:?}",
+                    idx, chapter.read, chapter.last_page_read, chapter.full_pages_read
+                );
+                let (style, prefix) = {
+                    match (chapter.read, chapter.last_page_read, chapter.full_pages_read) {
+                        (true, _, _) => (
+                            Style::default().fg(app.theme.colors[13]),
+                            "✓ ",
+                        ),
+                        (false, Some(last), Some(total)) if last > 0 && last < total => (
+                            Style::default().fg(app.theme.colors[12]),
+                            "▶ ",
+                        ),
+                        (false, None, _) | (false, Some(0), _) => (
+                            Style::default().fg(app.theme.colors[11]),
+                            "☐ ",
+                        ),
+                        (false, Some(last), Some(total)) if last >= total => (
+                            Style::default().fg(app.theme.colors[13]),
+                            "✓ ",
+                        ),
+                        _ => (
+                            Style::default().fg(app.theme.colors[10]),
+                            "☐ ",
+                        ),
+                    }
+                };
                 ListItem::new(vec![
                     Line::from(vec![Span::styled(
                         format!("{}{} - {}", prefix, chapter.number_display(), chapter.title),
@@ -397,12 +504,11 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
                         format!(
                             "   {}{}",
                             chapter.size_display(),
-                            chapter.last_page_read.map_or(String::new(), |page| {
-                                chapter.full_pages_read.map_or(
-                                    format!(" - Page {}", page),
-                                    |total| format!(" - Page {} / {}", page, total)
-                                )
-                            })
+                            match (chapter.last_page_read, chapter.full_pages_read) {
+                                (Some(page), Some(total)) => format!(" - Page {} / {}", page, total),
+                                (Some(page), None) => format!(" - Page {}", page),
+                                _ => String::new(),
+                            }
                         ),
                         Style::default().fg(app.theme.colors[11]),
                     )]),
@@ -452,23 +558,22 @@ fn draw_download_input(f: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.colors[11]));
     f.render_widget(block.clone(), area);
-    
+
     let inner_area = block.inner(area);
-    
+
     let input_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Length(3)])
         .split(inner_area);
-    
+
     let url_style = if app.input_field == InputField::Url {
-        Style::default().fg(app.theme.colors[13]).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(app.theme.colors[13])
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(app.theme.foreground)
     };
-    
+
     let url_input = Paragraph::new(app.download_url.as_str())
         .style(url_style)
         .block(
@@ -478,13 +583,15 @@ fn draw_download_input(f: &mut Frame, app: &mut App, area: Rect) {
                 .border_style(Style::default().fg(app.theme.colors[3])),
         );
     f.render_widget(url_input, input_chunks[0]);
-    
+
     let chapters_style = if app.input_field == InputField::Chapters {
-        Style::default().fg(app.theme.colors[13]).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(app.theme.colors[13])
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(app.theme.foreground)
     };
-    
+
     let chapters_input = Paragraph::new(app.selected_chapters_input.as_str())
         .style(chapters_style)
         .block(
@@ -501,16 +608,17 @@ fn draw_downloading(f: &mut Frame, app: &mut App, area: Rect) {
         .title(" Download ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.colors[11]));
-    
+
     f.render_widget(download_block.clone(), area);
-    
+
     let inner_area = download_block.inner(area);
-    
-    let logs_text: Vec<Line> = app.download_logs
+
+    let logs_text: Vec<Line> = app
+        .download_logs
         .iter()
         .map(|log| Line::from(log.as_str()))
         .collect();
-    
+
     let log_count = app.download_logs.len();
     let mut is_new_download = false;
     for log in app.download_logs.iter().rev() {
@@ -537,26 +645,32 @@ fn draw_downloading(f: &mut Frame, app: &mut App, area: Rect) {
     }
     app.last_log_count = log_count;
 
-    let (total_chapters, completed_chapters, progress, _current_chapter_images, _total_images_in_current_chapter, current_chapter) = app.calculate_download_progress();
-    
+    let (
+        total_chapters,
+        completed_chapters,
+        progress,
+        _current_chapter_images,
+        _total_images_in_current_chapter,
+        current_chapter,
+    ) = app.calculate_download_progress();
+
     let logs_area = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner_area);
 
     let logs_content_area = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(logs_area[0])[0];
 
-    if app.is_downloading && !app.has_user_scrolled && logs_text.len() > logs_content_area.height as usize {
-        app.scroll_offset = logs_text.len().saturating_sub(logs_content_area.height as usize) as u16;
+    if app.is_downloading
+        && !app.has_user_scrolled
+        && logs_text.len() > logs_content_area.height as usize
+    {
+        app.scroll_offset = logs_text
+            .len()
+            .saturating_sub(logs_content_area.height as usize) as u16;
     }
 
     let live_indicator = if app.download_finished {
@@ -577,7 +691,7 @@ fn draw_downloading(f: &mut Frame, app: &mut App, area: Rect) {
             Block::default()
                 .title(live_indicator)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme.colors[13]))
+                .border_style(Style::default().fg(app.theme.colors[13])),
         );
 
     f.render_widget(logs_widget, logs_content_area);
@@ -624,7 +738,7 @@ fn draw_downloading(f: &mut Frame, app: &mut App, area: Rect) {
     );
     let progress_line = Line::from(vec![Span::styled(
         progress_bar,
-        Style::default().fg(progress_color)
+        Style::default().fg(progress_color),
     )]);
     let progress_widget = Paragraph::new(Text::from(vec![progress_line]))
         .style(Style::default().fg(app.theme.foreground))
@@ -638,18 +752,20 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.colors[11]));
     f.render_widget(block.clone(), area);
-    
+
     let inner_area = block.inner(area);
-    
+
     let settings_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Length(3)])
         .split(inner_area);
-    
+
     let manga_dir_input = Paragraph::new(app.filter.as_str())
-        .style(Style::default().fg(app.theme.colors[13]).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(app.theme.colors[13])
+                .add_modifier(Modifier::BOLD),
+        )
         .block(
             Block::default()
                 .title(" Manga Directory ")
@@ -661,16 +777,16 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_help_overlay(f: &mut Frame, app: &mut App, area: Rect) {
     let popup_area = centered_rect(60, 60, area);
-    
+
     let block = Block::default()
         .title(" Help ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.colors[11]))
         .style(Style::default().bg(app.theme.background));
     f.render_widget(block.clone(), popup_area);
-    
+
     let inner_area = block.inner(popup_area);
-    
+
     let help_text = vec![
         Line::from("Navigation:"),
         Line::from("  j/k or Up/Down: Move up/down"),
@@ -700,7 +816,7 @@ fn draw_help_overlay(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from("  r: Refresh manga list"),
         Line::from("  Esc: Cancel download"),
     ];
-    
+
     let help_widget = Paragraph::new(Text::from(help_text))
         .style(Style::default().fg(app.theme.foreground))
         .wrap(Wrap { trim: true });
@@ -716,7 +832,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_y) / 2),
         ])
         .split(r);
-    
+
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([

@@ -1,14 +1,14 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use dirs::config_dir;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
-use dirs::config_dir;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub last_manga_dir: Option<PathBuf>,
     pub read_chapters: HashSet<String>,
@@ -46,7 +46,7 @@ impl Default for Settings {
     fn default() -> Self {
         let mut reader_options = HashMap::new();
         reader_options.insert("mode".to_string(), "webtoon".to_string());
-        
+
         Self {
             prefer_external: false,
             auto_mark_read: true,
@@ -96,7 +96,8 @@ impl Config {
             fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
         }
 
-        let config_str = serde_json::to_string_pretty(self).context("Failed to serialize config")?;
+        let config_str =
+            serde_json::to_string_pretty(self).context("Failed to serialize config")?;
 
         fs::write(&config_path, config_str).context("Failed to write config file")?;
 

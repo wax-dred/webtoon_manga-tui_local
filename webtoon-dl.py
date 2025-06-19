@@ -269,7 +269,7 @@ if not os.path.exists(cover_path) or not os.path.exists(synopsis_path):
                 title_underline = '━' * len(title)
 
                 with open(synopsis_path, 'w', encoding='utf-8') as f:
-                    f.write(f"{title}\n{title_underline}\n\n{formatted_synopsis}\n\nSource: {oeuvre_url}")
+                    f.write(f"{title}\n{title_underline}\n\n{formatted_synopsis}\n\nSource: {start_url}")
                 print(f"✅ Synopsis saved: {synopsis_path}")
             else:
                 print("⚠️ Synopsis not found")
@@ -385,9 +385,24 @@ for idx, current_chapter in enumerate(chapters, 1):
             for attempt in range(max_retries):
                 try:
                     img_data = scraper.get(img_url).content
-                    with open(filename, 'wb') as f:
-                        f.write(img_data)
-                    final_images.append(filename)
+
+                    # Ouvre l'image avec Pillow
+                    img = Image.open(io.BytesIO(img_data))
+                    # Convertit en RGB (évite les soucis PNG en mode P)
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+
+                    # Redimensionnement optionnel
+                    max_width = 1200  # <--- Ajuste à ce que tu veux
+                    if img.width > max_width:
+                        ratio = max_width / img.width
+                        new_size = (max_width, int(img.height * ratio))
+                        img = img.resize(new_size, Image.LANCZOS)
+
+                    # Sauvegarde JPEG recompressé
+                    filename_jpg = os.path.splitext(filename)[0] + ".jpg"
+                    img.save(filename_jpg, "JPEG", quality=78, optimize=True, progressive=True)
+                    final_images.append(filename_jpg)
                     print(f"Downloaded image {i}/{len(img_urls)} for Chapter {current_chapter}")
                     sys.stdout.write(f"Downloaded image {i}/{len(img_urls)} for Chapter {current_chapter}\n")
                     sys.stdout.flush()
@@ -414,7 +429,7 @@ for idx, current_chapter in enumerate(chapters, 1):
             continue
 
         # Créer le fichier CBR
-        zip_path = os.path.join(manga_dir, f"Chapitre_{current_chapter:03d}.cbr")
+        zip_path = os.path.join(manga_dir, f"Chapitre_{current_chapter:03d}.cbz")
         with ZipFile(zip_path, 'w') as myzip:
             for img in final_images:
                 myzip.write(img, os.path.basename(img))

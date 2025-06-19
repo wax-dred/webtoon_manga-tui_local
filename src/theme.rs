@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use ratatui::style::Color;
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct WalColors {
@@ -51,13 +51,14 @@ impl Theme {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = crate::util::expand_path(path);
         let json = fs::read_to_string(&path).context("Failed to read wal.json")?;
-        
+
         let wal: WalColors = serde_json::from_str(&json).context("Failed to parse wal.json")?;
-        
+
         Ok(Self {
             background: hex_to_color(&wal.special.background)?,
             foreground: hex_to_color(&wal.special.foreground)?,
-            cursor: hex_to_color(&wal.special.cursor).unwrap_or(Color::White),
+            cursor: hex_to_color(&wal.special.cursor)
+                .unwrap_or_else(|_| hex_to_color(&wal.special.foreground).unwrap_or(Color::White)),
             colors: [
                 hex_to_color(&wal.colors.color0)?,
                 hex_to_color(&wal.colors.color1)?,
@@ -83,10 +84,10 @@ impl Theme {
 fn hex_to_color(hex: &str) -> Result<Color> {
     let hex = hex.trim_start_matches('#');
     let bytes = hex::decode(hex).context("Failed to decode hex color")?;
-    
+
     if bytes.len() != 3 {
         return Err(anyhow::anyhow!("Invalid hex color length: {}", hex));
     }
-    
+
     Ok(Color::Rgb(bytes[0], bytes[1], bytes[2]))
 }
