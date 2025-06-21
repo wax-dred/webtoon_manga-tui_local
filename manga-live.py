@@ -1371,6 +1371,370 @@ class ThumbnailViewer:
         ideal_scroll = max(0, min(ideal_scroll, max(0, self.total_height - self.rect.height)))
         self.scroll_offset = ideal_scroll
 
+class FileSelector:
+    def __init__(self, screen_width, screen_height, colors, initial_dir=None):
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.colors = colors
+        self.initial_dir = Path.home() if initial_dir is None else Path(initial_dir).expanduser().absolute()
+        self.current_dir = self.initial_dir
+        self.supported_extensions = {".cbz", ".cbr", ".zip", ".rar", ".pdf"}
+        self.file_entries = []
+        self.scroll_offset = 0
+        self.selected_index = 0
+        self.visible = False
+        self.font = pygame.font.SysFont("arial", 18, bold=True)
+        self.title_font = pygame.font.SysFont("comicsansms", 24, bold=True)
+        self.item_height = 40
+        
+        # Dimensions de la fenêtre centrée
+        self.width = min(screen_width - 200, 600)
+        self.height = min(screen_height - 200, 400)
+        self.rect = pygame.Rect(
+            (screen_width - self.width) // 2,
+            (screen_height - self.height) // 2,
+            self.width,
+            self.height
+        )
+        
+        # Hauteur de l'en-tête (titre + chemin + marge)
+        self.header_height = 30
+        
+        self.update_file_list()
+
+    def update_file_list(self):
+        """Met à jour la liste des fichiers et dossiers."""
+        self.file_entries = []
+        if self.current_dir != self.current_dir.parent:
+            self.file_entries.append(("..", self.current_dir.parent, True))
+        try:
+            for item in sorted(self.current_dir.iterdir()):
+                if item.name.startswith('.'):
+                    continue
+                if item.is_dir():
+                    self.file_entries.append((item.name, item, True))
+                elif item.is_file() and item.suffix.lower() in self.supported_extensions:
+                    self.file_entries.append((item.name, item, False))
+        except PermissionError:
+            logging.warning(f"Permission refusée pour accéder à {self.current_dir}")
+        self.calculate_layout()
+        self.selected_index = 0
+        self.scroll_offset = 0  # Réinitialiser le scroll
+
+    def calculate_layout(self):
+        """Calcule les positions des éléments pour le défilement."""
+        
+        # Recalculer dynamiquement la hauteur de l'en-tête (titre + chemin + marge)
+        title_height = self.title_font.get_height()
+        path_height = self.font.get_height()
+        self.margin = 30
+        self.header_height = title_height + path_height + self.margin
+
+        self.positions = []
+        y = self.header_height
+        for _ in self.file_entries:
+            self.positions.append(y)
+            y += self.item_height
+
+        self.total_height = len(self.file_entries) * self.item_height
+        self.max_scroll = max(0, self.total_height - (self.rect.height - self.header_height))
+
+    def get_visible_indices(self):
+        """Retourne les indices des éléments visibles."""
+        if not self.file_entries:
+            return []
+        
+        visible_area_height = self.rect.height - self.header_height
+        visible_indices = []
+        
+        for i in range(len(self.file_entries)):
+            item_bottom = (i + 1) * self.item_height
+            # L'élément est visible s'il intersecte avec la zone visible
+            if (i * self.item_height < self.scroll_offset + visible_area_height and 
+                item_bottom > self.scroll_offset):
+                visible_indices.append(i)
+        
+        return visible_indices
+
+    def handle_event(self, event):
+        """Gère les événements (souris, clavier, défilement)."""
+        if not self.visible:
+            return None
+
+        if event.type == pygame.MOUSEWHEEL:
+            scroll_speed = 40
+            old_scroll = self.scroll_offset
+            self.scroll_offset = max(0, min(self.scroll_offset - event.y * scroll_speed, self.max_scroll))
+            return "consumed"
+            
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1 and self.rect.collidepoint(event.pos):  # Clic gauche
+                # Vérifier si le clic est dans la zone de contenu
+                content_rect = pygame.Rect(self.rect.x, self.rect.y + self.header_height, 
+                                         self.rect.width, self.rect.height - self.header_height)
+                if content_rect.collidepoint(event.pos):
+                    rel_y = event.pos[1] - (self.rect.y + self.header_height) + self.scroll_offset
+                    clicked_index = -1
+                    
+                    # Trouver l'élément cliqué en utilisant les positions
+                    for i in range(len(self.file_entries)):
+                        if i * self.item_height <= rel_y < (i + 1) * self.item_height:
+                            clicked_index = i
+                            break
+                    
+                    if 0 <= clicked_index < len(self.file_entries):
+                        self.selected_index = clicked_index
+                        name, path, is_dir = self.file_entries[clicked_index]
+                        if is_dir:
+                            self.current_dir = path
+                            self.update_file_list()
+                        else:
+                            return path
+                return "consumed"
+            elif not self.rect.collidepoint(event.pos):  # Clic en dehors
+                self.visible = False
+                return "consumed"
+                
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.visible = False
+                return "consumed"
+                
+            elif event.key == pygame.K_RETURN:
+                if 0 <= self.selected_index < len(self.file_entries):
+                    name, path, is_dir = self.file_entries[self.selected_index]
+                    if is_dir:
+                        self.current_dir = path
+                        self.update_file_list()
+                    else:
+                        return path
+                return "consumed"
+                
+            elif event.key == pygame.K_UP:
+                if self.file_entries:
+                    self.selected_index = max(0, self.selected_index - 1)
+                    self.ensure_visible()
+                return "consumed"
+                
+            elif event.key == pygame.K_DOWN:
+                if self.file_entries:
+                    self.selected_index = min(len(self.file_entries) - 1, self.selected_index + 1)
+                    self.ensure_visible()
+                return "consumed"
+                
+            elif event.key == pygame.K_PAGEUP:
+                visible_count = (self.rect.height - self.header_height) // self.item_height
+                self.scroll_offset = max(0, self.scroll_offset - visible_count * self.item_height)
+                return "consumed"
+                
+            elif event.key == pygame.K_PAGEDOWN:
+                visible_count = (self.rect.height - self.header_height) // self.item_height
+                self.scroll_offset = min(self.max_scroll, self.scroll_offset + visible_count * self.item_height)
+                return "consumed"
+                
+            elif pygame.K_a <= event.key <= pygame.K_z:
+                char = chr(event.key).lower()
+                # Chercher le fichier/dossier commençant par cette lettre
+                found = False
+                for i, (name, _, _) in enumerate(self.file_entries):
+                    if name.lower().startswith(char):
+                        self.selected_index = i
+                        self.ensure_visible()
+                        found = True
+                        break
+                
+                return "consumed"  # Toujours consommer les touches de lettres
+            
+            # Bloquer toutes les autres touches pour éviter les reloads
+            return "consumed"
+                
+        return None
+
+    def ensure_visible(self):
+        """S'assure que l'élément sélectionné est visible dans la zone scrollable."""
+        if not self.file_entries:
+            return
+
+        item_top = self.item_height * self.selected_index
+        item_bottom = item_top + self.item_height
+        visible_top = self.scroll_offset
+        visible_bottom = self.scroll_offset + (self.rect.height - self.header_height)
+
+        if item_top < visible_top:
+            self.scroll_offset = item_top
+        elif item_bottom > visible_bottom:
+            self.scroll_offset = item_bottom - (self.rect.height - self.header_height)
+
+        self.scroll_offset = max(0, min(self.scroll_offset, self.max_scroll))
+
+    def draw(self, surface):
+        """Dessine la fenêtre de sélection de fichiers."""
+        if not self.visible:
+            return
+
+        # Fond avec ombre
+        draw_rounded_rect(surface, self.colors["thumbnail_bg"], self.rect, radius=16, shadow=True)
+        pygame.draw.rect(surface, self.colors["colors_13"], self.rect, width=3, border_radius=16)
+
+        # Titre
+        title_text = self.title_font.render("Sélectionner un fichier", True, self.colors["foreground"])
+        title_rect = title_text.get_rect(center=(self.rect.centerx, self.rect.y + 25))
+        surface.blit(title_text, title_rect)
+
+        # Chemin courant (tronqué si trop long)
+        path_str = str(self.current_dir)
+        if len(path_str) > 50:  # Limiter la longueur affichée
+            path_str = "..." + path_str[-47:]
+        path_text = self.font.render(path_str, True, self.colors["button_hover"])
+        path_rect = path_text.get_rect(topleft=(self.rect.x + 10, self.rect.y + 60))
+        surface.blit(path_text, path_rect)
+
+        # Zone de contenu avec clipping
+        content_rect = pygame.Rect(self.rect.x, self.rect.y + self.header_height, 
+                                 self.rect.width, self.rect.height - self.header_height)
+        old_clip = surface.get_clip()
+        surface.set_clip(content_rect)
+
+        # Dessiner les éléments visibles
+        visible_indices = self.get_visible_indices()
+        for i in visible_indices:
+            if i >= len(self.file_entries):
+                continue
+                
+            name, _, is_dir = self.file_entries[i]
+            
+            # Position de l'élément
+            item_y = self.rect.y + self.header_height + (i * self.item_height) - self.scroll_offset
+            button_rect = pygame.Rect(self.rect.x + 10, item_y, self.rect.width - 20, self.item_height - 5)
+            
+            # Couleur selon l'état
+            is_selected = (i == self.selected_index)
+            color = self.colors["button_hover"] if is_selected else self.colors["button_bg"]
+            
+            # Dessiner le bouton
+            pygame.draw.rect(surface, color, button_rect, border_radius=10)
+            
+            # Texte avec icône pour les dossiers
+            display_name = f"📁 {name}" if is_dir else name
+            text_surf = self.font.render(display_name, True, self.colors["colors_13"])
+            text_rect = text_surf.get_rect(center=button_rect.center)
+            surface.blit(text_surf, text_rect)
+
+        # Barre de défilement
+        if self.total_height > (self.rect.height - self.header_height):
+            # Calcul de la barre de défilement
+            scrollbar_track_height = self.rect.height - self.header_height
+            scrollbar_height = max(20, int((scrollbar_track_height / self.total_height) * scrollbar_track_height))
+            
+            if self.max_scroll > 0:
+                scrollbar_pos = int((self.scroll_offset / self.max_scroll) * (scrollbar_track_height - scrollbar_height))
+            else:
+                scrollbar_pos = 0
+                
+            scrollbar_rect = pygame.Rect(
+                self.rect.x + self.rect.width - 15, 
+                self.rect.y + self.header_height + scrollbar_pos, 
+                8, 
+                scrollbar_height
+            )
+            pygame.draw.rect(surface, self.colors["button_hover"], scrollbar_rect, border_radius=4)
+
+        surface.set_clip(old_clip)
+
+    def draw(self, surface):
+        """Dessine la fenêtre de sélection de fichiers."""
+        if not self.visible:
+            return
+
+        # Fond avec ombre
+        draw_rounded_rect(surface, self.colors["thumbnail_bg"], self.rect, radius=16, shadow=True)
+        pygame.draw.rect(surface, self.colors["colors_13"], self.rect, width=3, border_radius=16)
+
+        # Titre
+        title_text = self.title_font.render("Sélectionner un fichier", True, self.colors["foreground"])
+        title_rect = title_text.get_rect(center=(self.rect.centerx, self.rect.y + 30))
+        surface.blit(title_text, title_rect)
+
+        # Chemin courant
+        path_text = self.font.render(str(self.current_dir), True, self.colors["button_hover"])
+        path_rect = path_text.get_rect(topleft=(self.rect.x + 10, self.rect.y + 50))
+        surface.blit(path_text, path_rect)
+
+        # Clipping pour les éléments
+        old_clip = surface.get_clip()
+        surface.set_clip(pygame.Rect(self.rect.x, self.rect.y + 70, self.rect.width, self.rect.height - 70))
+
+        # Boutons pour les fichiers/dossiers visibles
+        visible_indices = self.get_visible_indices()
+        for i in visible_indices:
+            name, _, is_dir = self.file_entries[i]
+            y = self.rect.y + self.item_height * i - self.scroll_offset
+            button_rect = pygame.Rect(self.rect.x + 10, y, self.rect.width - 20, self.item_height - 5)
+            is_hovered = (i == self.selected_index)
+            color = self.colors["button_hover"] if is_hovered else self.colors["button_bg"]
+            pygame.draw.rect(surface, color, button_rect, border_radius=10)
+            text_surf = self.font.render(name, True, self.colors["colors_13"])
+            text_rect = text_surf.get_rect(center=button_rect.center)
+            surface.blit(text_surf, text_rect)
+
+        # Barre de défilement
+        visible_count = (self.rect.height - 70) // self.item_height
+        total_count = len(self.file_entries)
+        if total_count > visible_count:
+            scrollbar_height = int((visible_count / total_count) * (self.rect.height - 70))
+            scrollbar_pos = int((self.scroll_offset / (total_count * self.item_height - (self.rect.height - 70))) * (self.rect.height - 70))
+            scrollbar_rect = pygame.Rect(self.rect.x + self.rect.width - 10, self.rect.y + 70 + scrollbar_pos, 6, scrollbar_height)
+            pygame.draw.rect(surface, self.colors["button_hover"], scrollbar_rect, border_radius=3)
+
+        surface.set_clip(old_clip)
+
+    def draw(self, surface):
+        """Dessine la fenêtre de sélection de fichiers."""
+        if not self.visible:
+            return
+
+        # Fond avec ombre
+        draw_rounded_rect(surface, self.colors["thumbnail_bg"], self.rect, radius=16, shadow=True)
+        pygame.draw.rect(surface, self.colors["colors_13"], self.rect, width=3, border_radius=16)
+
+        # Titre
+        title_text = self.title_font.render("Sélectionner un fichier", True, self.colors["foreground"])
+        title_rect = title_text.get_rect(center=(self.rect.centerx, self.rect.y + 30))
+        surface.blit(title_text, title_rect)
+
+        # Chemin courant
+        path_text = self.font.render(str(self.current_dir), True, self.colors["button_hover"])
+        path_rect = path_text.get_rect(topleft=(self.rect.x + 10, self.rect.y + 50))
+        surface.blit(path_text, path_rect)
+
+        # Clipping pour les éléments
+        old_clip = surface.get_clip()
+        surface.set_clip(pygame.Rect(self.rect.x, self.rect.y + 70, self.rect.width, self.rect.height - 70))
+
+        # Boutons pour les fichiers/dossiers visibles
+        visible_indices = self.get_visible_indices()
+        for i in visible_indices:
+            name, _, is_dir = self.file_entries[i]
+            y = self.rect.y + self.positions[i] - self.scroll_offset
+            button_rect = pygame.Rect(self.rect.x + 10, y, self.rect.width - 20, self.item_height - 5)
+            is_hovered = (i == self.selected_index)
+            color = self.colors["button_hover"] if is_hovered else self.colors["button_bg"]
+            pygame.draw.rect(surface, color, button_rect, border_radius=10)
+            text_surf = self.font.render(name, True, self.colors["colors_13"])
+            text_rect = text_surf.get_rect(center=button_rect.center)
+            surface.blit(text_surf, text_rect)
+
+        # Barre de défilement
+        visible_count = (self.rect.height - 70) // self.item_height
+        total_count = len(self.file_entries)
+        if total_count > visible_count:
+            scrollbar_height = int((visible_count / total_count) * (self.rect.height - 70))
+            scrollbar_pos = int((self.scroll_offset / (total_count * self.item_height - (self.rect.height - 70))) * (self.rect.height - 70))
+            scrollbar_rect = pygame.Rect(self.rect.x + self.rect.width - 10, self.rect.y + 70 + scrollbar_pos, 6, scrollbar_height)
+            pygame.draw.rect(surface, self.colors["button_hover"], scrollbar_rect, border_radius=3)
+
+        surface.set_clip(old_clip)
+        
 class ModernProgressBar:
     def __init__(self, x, y, width, height, radius=20, colors=None):
         self.rect = pygame.Rect(x, y, width, height)
@@ -1844,11 +2208,11 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
         speed_slider = Slider(screen_width - 140, 50, 100, 10, 150, 1200, 200, colors)
         progress_bar = ModernProgressBar(screen_width - 220, screen_height - 50, 200, 25, colors=colors)
         thumbnail_viewer = ThumbnailViewer(10, 10, 120, screen_height - 20, images, image_cache, screen_width, screen_height, colors, cache_dir)
+        file_selector = FileSelector(screen_width, screen_height, colors, initial_dir=archive_path.parent if archive_path else None)
         running = True
         is_scrolling = False
         last_scroll_time = pygame.time.get_ticks() / 1000.0
         thumbnail_viewer.scroll_to_current_page(current_page)
-        thumbnail_viewer.draw(screen, current_page)
         t0 = print_timing("Initialisation des widgets UI", t0)
 
         def update_layout():
@@ -1863,6 +2227,13 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                 progress_bar.rect.topright = (screen_width - 220, screen_height - 50)
             thumbnail_viewer.rect = pygame.Rect(10, 10, 120, screen_height - 20)
             thumbnail_viewer.calculate_layout()
+            file_selector.rect = pygame.Rect(
+                (screen_width - file_selector.width) // 2,
+                (screen_height - file_selector.height) // 2,
+                file_selector.width,
+                file_selector.height
+            )
+            file_selector.calculate_layout()
             webtoon_renderer.update_screen(screen_width, screen_height)
             manga_renderer.update_screen(screen_width, screen_height)
             webtoon_renderer.calculate_layout(zoom)
@@ -1882,26 +2253,36 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                     update_layout()
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_o:
-                        # Sauvegarder la progression actuelle
-                        progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
-                        # Nettoyer l'état actuel
-                        loader.stop()
-                        image_cache.clear()
-                        pygame.display.quit()
-                        pygame.display.init()
-                        # Ouvrir la boîte de dialogue pour un nouveau fichier
-                        current_dir = archive_path.parent if archive_path else None
-                        new_archive_path = show_file_dialogue(initial_dir=current_dir)
-                        if new_archive_path:
-                            # Redémarrer avec le nouveau fichier
-                            return run_reader(new_archive_path, start_page=1, cache_dir=cache_dir)
-                        else:
-                            # Restaurer l'affichage si aucun fichier n'est sélectionné
-                            screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
-                            screen_width, screen_height = screen.get_size()
-                            pygame.display.set_caption(f"Lecteur Webtoon: {Path(archive_path).stem}")
-                            loader = ImageLoaderThread(image_cache, images, screen_width, screen_height, zoom)
-                            update_layout()
+                        file_selector.visible = not file_selector.visible
+                    elif file_selector.visible:
+                        result = file_selector.handle_event(event)
+                        if result == "consumed":
+                            continue
+                        elif result is not None:
+                            progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
+                            loader.stop()
+                            image_cache.clear()
+                            pygame.display.quit()
+                            pygame.display.init()
+                            return run_reader(result, start_page=1, cache_dir=cache_dir)
+                        # Restaurer l'affichage si aucun fichier n'est sélectionné
+                        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
+                        screen_width, screen_height = screen.get_size()
+                        pygame.display.set_caption(f"Lecteur Webtoon: {Path(archive_path).stem}")
+                        loader = ImageLoaderThread(image_cache, images, screen_width, screen_height, zoom)
+                        update_layout()
+                    elif event.type == pygame.MOUSEWHEEL or event.type == pygame.MOUSEBUTTONDOWN:
+                        if file_selector.visible:
+                            result = file_selector.handle_event(event)
+                            if result == "consumed":
+                                continue
+                            elif result is not None:
+                                progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
+                                loader.stop()
+                                image_cache.clear()
+                                pygame.display.quit()
+                                pygame.display.init()
+                                return run_reader(result, start_page=1, cache_dir=cache_dir)
                     elif mode == 'webtoon' and (pygame.key.get_mods() & pygame.KMOD_CTRL):
                         if event.key == pygame.K_UP:
                             old_zoom = zoom
@@ -1989,7 +2370,7 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                     elif event.key == pygame.K_RETURN and mode == 'webtoon':
                         is_scrolling = not is_scrolling
                         play_button.text = "Stop" if is_scrolling else "Play"
-                    elif not thumbnail_viewer.visible:
+                    elif not thumbnail_viewer.visible and not file_selector.visible:
                         if mode == 'webtoon':
                             if event.key == pygame.K_HOME: scroll_offset = 0
                             elif event.key == pygame.K_END: scroll_offset = max(0, webtoon_renderer.total_height - screen_height)
@@ -2001,6 +2382,17 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                             elif event.key in [pygame.K_PAGEDOWN, pygame.K_DOWN]: manga_renderer.next_page()
                             elif event.key in [pygame.K_PAGEUP, pygame.K_UP]: manga_renderer.prev_page()
                 elif event.type == pygame.MOUSEWHEEL:
+                    if file_selector.visible:
+                        result = file_selector.handle_event(event)
+                        if result == "consumed":
+                            continue
+                        elif result is not None:
+                            progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
+                            loader.stop()
+                            image_cache.clear()
+                            pygame.display.quit()
+                            pygame.display.init()
+                            return run_reader(result, start_page=1, cache_dir=cache_dir)
                     if mode == 'webtoon' and (pygame.key.get_mods() & pygame.KMOD_CTRL):
                         old_zoom = zoom
                         if event.y > 0:
@@ -2032,7 +2424,6 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                             else:
                                 new_image_height = webtoon_renderer.image_sizes.get(webtoon_renderer.images[current_page_index], (0,1))[1]
                                 scroll_offset = webtoon_renderer.image_positions[current_page_index] + int(image_scroll_ratio * new_image_height)
-
                         continue
                     if mode == 'manga' and (pygame.key.get_mods() & pygame.KMOD_CTRL):
                         old_zoom = manga_renderer.zoom if hasattr(manga_renderer, 'zoom') else 1.0
@@ -2091,7 +2482,7 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
             keys = pygame.key.get_pressed()
             if mode == 'manga':
                 manga_renderer.update_transition()
-            if not thumbnail_viewer.visible:
+            if not thumbnail_viewer.visible and not file_selector.visible:
                 if mode == 'webtoon':
                     scroll_speed = calculate_scroll_speed(zoom) // 3
                     if keys[pygame.K_DOWN] or keys[pygame.K_s] or keys[pygame.K_SPACE]:
@@ -2136,6 +2527,7 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                 speed_slider.draw(screen)
             progress_bar.draw(screen, progress, current_page, total_pages)
             thumbnail_viewer.draw(screen, current_page)
+            file_selector.draw(screen)  # Ajouter le rendu de FileSelector
             t0 = print_timing("Rendu des éléments UI", t0)
 
             pygame.display.flip()
