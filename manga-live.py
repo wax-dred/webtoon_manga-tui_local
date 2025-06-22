@@ -75,6 +75,7 @@ def load_wal_colors():
         wal_colors = wal_data.get("colors", {})
         colors["button_bg"] = hex_to_rgb(wal_colors.get("color0", "#48484A"))
         colors["button_hover"] = hex_to_rgb(wal_colors.get("color8", "#926F64"))
+        colors["button_active"] = hex_to_rgb(wal_colors.get("color4", "#1E90FF"))
         colors["slider_bg"] = hex_to_rgb(wal_colors.get("color3", "#2B1513"))
         colors["slider_handle"] = hex_to_rgb(wal_colors.get("color12", "#D09E8F"))
         colors["progress_bar_bg"] = hex_to_rgb(wal_colors.get("color7", "#D09E8F"))
@@ -1371,6 +1372,195 @@ class ThumbnailViewer:
         ideal_scroll = max(0, min(ideal_scroll, max(0, self.total_height - self.rect.height)))
         self.scroll_offset = ideal_scroll
 
+class ConfigMenu:
+    def __init__(self, screen_width, screen_height, colors, config_path=None):
+        self.width = 400
+        self.height = 200
+        self.rect = pygame.Rect((screen_width - self.width) // 2, (screen_height - self.height) // 2, self.width, self.height)
+        self.colors = colors
+        self.visible = False
+        self.font = pygame.font.SysFont('arial', 18, bold=True)
+        self.title_font = pygame.font.SysFont('comicsansms', 24, bold=True)
+        self.item_height = 40
+        self.header_height = 70
+        self.entries = [
+            {"label": "Webtoon Zoom (%)", "type": "number", "key": "webtoon_zoom", "min": 20, "max": 200},
+            {"label": "Webtoon Scroll Speed", "type": "number", "key": "webtoon_scroll_speed", "min": 200, "max": 1200},
+            {"label": "Valider", "type": "action", "key": "validate"}
+        ]
+        self.config = self.load_config(config_path)
+        self.selected_index = 0
+        self.editing = False
+        self.edit_value = ""
+        self.calculate_layout()
+
+    def load_config(self, config_path=None):
+        default_config = {
+            "manga_zoom": 100,
+            "webtoon_zoom": 100,
+            "webtoon_scroll_speed": 300
+        }
+        if config_path is None:
+            config_path = Path.home() / ".config" / "manga_reader" / "config.json"
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                default_config.update(config)
+            else:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(default_config, f, indent=4)
+        except Exception as e:
+            logging.error(f"Erreur lors du chargement de la configuration : {e}")
+        return default_config
+
+    def save_config(self):
+        config_path = Path.home() / ".config" / "manga_reader" / "config.json"
+        try:
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=4)
+            logging.debug("Configuration sauvegardée avec succès")
+        except Exception as e:
+            logging.error(f"Erreur lors de la sauvegarde de la configuration : {e}")
+
+    def calculate_layout(self):
+        self.positions = []
+        y = self.header_height
+        for _ in self.entries:
+            self.positions.append(y)
+            y += self.item_height
+        self.total_height = y
+
+    def get_visible_indices(self):
+        # Toutes les entrées sont visibles, pas besoin de filtrer
+        return list(range(len(self.entries)))
+
+    def handle_event(self, event):
+        if not self.visible:
+            return None
+        if event.type == pygame.KEYDOWN:
+            if self.editing:
+                if event.key == pygame.K_RETURN:
+                    if self.edit_value:
+                        try:
+                            value = int(self.edit_value)
+                            entry = self.entries[self.selected_index]
+                            value = max(entry["min"], min(entry["max"], value))
+                            self.config[entry["key"]] = value
+                            logging.debug(f"Configuration modifiée: {entry['key']} = {value}")
+                        except ValueError:
+                            logging.debug("Valeur saisie invalide, ignorée.")
+                    self.editing = False
+                    self.edit_value = ""
+                    return "consumed"
+                elif event.key == pygame.K_BACKSPACE:
+                    self.edit_value = self.edit_value[:-1]
+                    return "consumed"
+                elif event.key == pygame.K_ESCAPE:
+                    self.editing = False
+                    self.edit_value = ""
+                    return "consumed"
+                elif event.unicode.isdigit():
+                    if len(self.edit_value) < 4:
+                        self.edit_value += event.unicode
+                    return "consumed"
+                return "consumed"
+            else:
+                if event.key == pygame.K_ESCAPE or event.key == pygame.K_c:
+                    self.save_config()
+                    self.visible = False
+                    return "consumed"
+                elif event.key == pygame.K_RETURN:
+                    entry = self.entries[self.selected_index]
+                    if entry["type"] == "number":
+                        self.editing = True
+                        self.edit_value = ""
+                        return "consumed"
+                    elif entry["type"] == "action" and entry["key"] == "validate":
+                        self.save_config()
+                        self.visible = False
+                        logging.debug("Configuration validée et menu fermé")
+                        return "validate"
+                    return "consumed"
+                elif event.key == pygame.K_UP:
+                    self.selected_index = max(0, self.selected_index - 1)
+                    return "consumed"
+                elif event.key == pygame.K_DOWN:
+                    self.selected_index = min(len(self.entries) - 1, self.selected_index + 1)
+                    return "consumed"
+                elif event.key == pygame.K_LEFT:
+                    entry = self.entries[self.selected_index]
+                    if entry["type"] == "number":
+                        current_value = self.config.get(entry["key"], entry["min"])
+                        new_value = max(entry["min"], current_value - 10)
+                        self.config[entry["key"]] = new_value
+                        logging.debug(f"Configuration modifiée: {entry['key']} = {new_value}")
+                    return "consumed"
+                elif event.key == pygame.K_RIGHT:
+                    entry = self.entries[self.selected_index]
+                    if entry["type"] == "number":
+                        current_value = self.config.get(entry["key"], entry["min"])
+                        new_value = min(entry["max"], current_value + 10)
+                        self.config[entry["key"]] = new_value
+                        logging.debug(f"Configuration modifiée: {entry['key']} = {new_value}")
+                    return "consumed"
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            mouse_pos = event.pos
+            for i in range(len(self.entries)):
+                y = self.rect.y + self.positions[i]
+                button_rect = pygame.Rect(self.rect.x + 10, y, self.rect.width - 20, self.item_height - 5)
+                if button_rect.collidepoint(mouse_pos):
+                    self.selected_index = i
+                    entry = self.entries[i]
+                    if entry["type"] == "number":
+                        self.editing = True
+                        self.edit_value = ""
+                        return "consumed"
+                    elif entry["type"] == "action" and entry["key"] == "validate":
+                        self.save_config()
+                        self.visible = False
+                        logging.debug("Configuration validée et menu fermé")
+                        return "validate"
+                    return "consumed"
+        return None
+
+    def draw(self, surface):
+        if not self.visible:
+            return
+        draw_rounded_rect(surface, self.colors["thumbnail_bg"], self.rect, radius=16, shadow=True)
+        pygame.draw.rect(surface, self.colors["colors_13"], self.rect, width=3, border_radius=16)
+        title_text = self.title_font.render("Configuration", True, self.colors["foreground"])
+        title_rect = title_text.get_rect(center=(self.rect.centerx, self.rect.y + 30))
+        surface.blit(title_text, title_rect)
+        old_clip = surface.get_clip()
+        surface.set_clip(pygame.Rect(self.rect.x, self.rect.y + self.header_height,
+                                    self.rect.width, self.rect.height - self.header_height))
+        for i in range(len(self.entries)):
+            entry = self.entries[i]
+            y = self.rect.y + self.positions[i]
+            button_rect = pygame.Rect(self.rect.x + 10, y, self.rect.width - 20, self.item_height - 5)
+            is_hovered = (i == self.selected_index)
+            color = (self.colors["button_active"] if is_hovered and self.editing else
+                     self.colors["button_hover"] if is_hovered else
+                     self.colors["colors_13"] if entry["type"] == "action" else
+                     self.colors["button_bg"])
+            pygame.draw.rect(surface, color, button_rect, border_radius=10)
+            if entry["type"] == "number":
+                if i == self.selected_index and self.editing:
+                    value = self.edit_value if self.edit_value else "_"
+                    text = f"{entry['label']}: {value}"
+                else:
+                    value = self.config.get(entry["key"], entry["min"])
+                    text = f"{entry['label']}: {value}"
+            elif entry["type"] == "action":
+                text = entry["label"]
+            text_surf = self.font.render(text, True, self.colors["foreground"])
+            text_rect = text_surf.get_rect(center=button_rect.center)
+            surface.blit(text_surf, text_rect)
+        surface.set_clip(old_clip)
+
 class FileSelector:
     def __init__(self, screen_width, screen_height, colors, initial_dir=None):
         self.screen_width = screen_width
@@ -1973,6 +2163,7 @@ class MangaRenderer(BaseRenderer):
         self.transition_progress = 0.0  # Progression de l'animation (0.0 à 1.0)
         self.transition_direction = 0    # 0: pas de transition, 1: suivante, -1: précédente
         self.transition_speed = 0.05     # Vitesse de l'animation (ajustable)
+        self.zoom = 1.0
 
     def next_page(self):
         if self.current_page < len(self.images) - 1 and self.transition_progress == 0:
@@ -2006,13 +2197,14 @@ class MangaRenderer(BaseRenderer):
         
         # Page actuelle
         i = self.current_page
-        key = f"{self.images[i]}_{getattr(self, 'zoom', 1.0):.2f}_manga"
+        key = f"{self.images[i]}_{self.zoom:.2f}_manga"
         cached = self.cache.get(key)
         if cached:
             img, (w, h) = cached
         else:
-            img, (w, h) = load_image_to_pygame(self.images[i], self.screen_width, self.screen_height, getattr(self, 'zoom', 1.0), 'manga')
-            if img: self.cache.put(key, (img, (w, h)))
+            img, (w, h) = load_image_to_pygame(self.images[i], self.screen_width, self.screen_height, self.zoom, 'manga')
+            if img: 
+                self.cache.put(key, (img, (w, h)))
         
         # Calcul de la position de la page actuelle
         x_current = (self.screen_width - w) // 2
@@ -2026,13 +2218,14 @@ class MangaRenderer(BaseRenderer):
             # Page suivante ou précédente
             next_page = self.current_page + self.transition_direction
             if 0 <= next_page < len(self.images):
-                key_next = f"{self.images[next_page]}_1.0_manga"
+                key_next = f"{self.images[next_page]}_{self.zoom:.2f}_manga"  # Utiliser self.zoom
                 cached_next = self.cache.get(key_next)
                 if cached_next:
                     img_next, (w_next, h_next) = cached_next
                 else:
-                    img_next, (w_next, h_next) = load_image_to_pygame(self.images[next_page], self.screen_width, self.screen_height, 1.0, 'manga')
-                    if img_next: self.cache.put(key_next, (img_next, (w_next, h_next)))
+                    img_next, (w_next, h_next) = load_image_to_pygame(self.images[next_page], self.screen_width, self.screen_height, self.zoom, 'manga')
+                    if img_next: 
+                        self.cache.put(key_next, (img_next, (w_next, h_next)))
                 
                 x_next = x_current + (self.screen_width * self.transition_direction)
                 y_next = (self.screen_height - h_next) // 2
@@ -2044,6 +2237,7 @@ class MangaRenderer(BaseRenderer):
         # Afficher la page actuelle
         if img:
             screen.blit(img, (x_current, y))
+            logging.debug(f"Page {i} rendue avec zoom {self.zoom}")
         else:
             pygame.draw.rect(screen, (50,50,50), (50,50,self.screen_width-100, self.screen_height-100))
         
@@ -2179,8 +2373,8 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
         t0 = print_timing("Détection du mode (webtoon/manga)", t0)
 
         image_cache = ImageCache(max_size=150)
-        zoom = 1.0
-        scroll_offset = 0
+        config_menu = ConfigMenu(screen_width, screen_height, colors)
+        zoom = float(config_menu.config["webtoon_zoom"]) / 100.0 if mode == "webtoon" else float(config_menu.config["manga_zoom"]) / 100.0
         loader = ImageLoaderThread(image_cache, images, screen_width, screen_height, zoom)
         webtoon_renderer = WebtoonRenderer(images, screen_width, screen_height, image_cache, sizes=sizes)
         manga_renderer = MangaRenderer(images, screen_width, screen_height, image_cache)
@@ -2205,10 +2399,12 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
         font = pygame.font.SysFont('arial', 18, bold=True)
         mode_button = ModernButton(screen_width - 250, 10, 120, 30, f"{mode.capitalize()}", font, colors)
         play_button = ModernButton(screen_width - 120, 10, 100, 30, "Play", font, colors)
-        speed_slider = Slider(screen_width - 140, 50, 100, 10, 150, 1200, 200, colors)
+        default_scroll_speed = config_menu.config["webtoon_scroll_speed"]
+        speed_slider = Slider(screen_width - 140, 50, 100, 10, 150, 1200, default_scroll_speed, colors)
         progress_bar = ModernProgressBar(screen_width - 220, screen_height - 50, 200, 25, colors=colors)
         thumbnail_viewer = ThumbnailViewer(10, 10, 120, screen_height - 20, images, image_cache, screen_width, screen_height, colors, cache_dir)
-        file_selector = FileSelector(screen_width, screen_height, colors, initial_dir=archive_path.parent if archive_path else None)
+        file_picker = FileSelector(screen_width, screen_height, colors, initial_dir=archive_path.parent if archive_path else None)
+        config_menu = ConfigMenu(screen_width, screen_height, colors)
         running = True
         is_scrolling = False
         last_scroll_time = pygame.time.get_ticks() / 1000.0
@@ -2217,23 +2413,30 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
 
         def update_layout():
             nonlocal screen_width, screen_height
-            screen_width, screen_height = pygame.display.get_surface().get_size()
+            screen_width, screen_height = screen.get_size()
             mode_button.rect.topleft = (screen_width - 250, 10)
             play_button.rect.topleft = (screen_width - 120, 10)
-            speed_slider.rect.topleft = (screen_width - 240, 50)
+            speed_slider.rect.topleft = (screen_width - 140, 50)
             if mode == 'webtoon':
-                progress_bar.rect.topright = (screen_width - 220, screen_height - 50)
+                progress_bar.rect.topright = (screen_width - 20, screen_height - 50)
             else:  # mode 'manga'
-                progress_bar.rect.topright = (screen_width - 220, screen_height - 50)
+                progress_bar.rect.topright = (screen_width - 20, screen_height - 50)
             thumbnail_viewer.rect = pygame.Rect(10, 10, 120, screen_height - 20)
             thumbnail_viewer.calculate_layout()
-            file_selector.rect = pygame.Rect(
-                (screen_width - file_selector.width) // 2,
-                (screen_height - file_selector.height) // 2,
-                file_selector.width,
-                file_selector.height
+            file_picker.rect = pygame.Rect(
+                (screen_width - file_picker.width) // 2,
+                (screen_height - file_picker.height) // 2,
+                file_picker.width,
+                file_picker.height
             )
-            file_selector.calculate_layout()
+            file_picker.calculate_layout()
+            config_menu.rect = pygame.Rect(
+                (screen_width - config_menu.width) // 2,
+                (screen_height - config_menu.height) // 2,
+                config_menu.width,
+                config_menu.height
+            )
+            config_menu.calculate_layout()
             webtoon_renderer.update_screen(screen_width, screen_height)
             manga_renderer.update_screen(screen_width, screen_height)
             webtoon_renderer.calculate_layout(zoom)
@@ -2252,10 +2455,34 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                 elif event.type == pygame.VIDEORESIZE:
                     update_layout()
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_o:
-                        file_selector.visible = not file_selector.visible
-                    elif file_selector.visible:
-                        result = file_selector.handle_event(event)
+                    if event.key == pygame.K_c:
+                        config_menu.visible = not config_menu.visible
+                    elif config_menu.visible:
+                        result = config_menu.handle_event(event)
+                        if result == "consumed":
+                            continue
+                        elif result == "validate":
+                            # Appliquer immédiatement les modifications
+                            new_zoom = float(config_menu.config["webtoon_zoom"]) / 100.0 if mode == "webtoon" else float(config_menu.config["manga_zoom"]) / 100.0
+                            if new_zoom != zoom:
+                                logging.debug(f"Zoom mis à jour: {zoom} -> {new_zoom}")
+                                zoom = new_zoom
+                                if mode == "webtoon":
+                                    webtoon_renderer.calculate_layout(zoom)
+                                    image_cache.clear_except_zoom(zoom, 'webtoon')
+                                else:
+                                    manga_renderer.zoom = zoom
+                                    image_cache.clear()
+                            if mode == "webtoon":
+                                new_scroll_speed = config_menu.config["webtoon_scroll_speed"]
+                                if new_scroll_speed != speed_slider.value:
+                                    logging.debug(f"Vitesse de défilement mise à jour: {speed_slider.value} -> {new_scroll_speed}")
+                                    speed_slider.value = new_scroll_speed
+                            continue
+                    elif event.key == pygame.K_o:
+                        file_picker.visible = not file_picker.visible
+                    elif file_picker.visible:
+                        result = file_picker.handle_event(event)
                         if result == "consumed":
                             continue
                         elif result is not None:
@@ -2265,24 +2492,6 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                             pygame.display.quit()
                             pygame.display.init()
                             return run_reader(result, start_page=1, cache_dir=cache_dir)
-                        # Restaurer l'affichage si aucun fichier n'est sélectionné
-                        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.DOUBLEBUF | pygame.HWSURFACE)
-                        screen_width, screen_height = screen.get_size()
-                        pygame.display.set_caption(f"Lecteur Webtoon: {Path(archive_path).stem}")
-                        loader = ImageLoaderThread(image_cache, images, screen_width, screen_height, zoom)
-                        update_layout()
-                    elif event.type == pygame.MOUSEWHEEL or event.type == pygame.MOUSEBUTTONDOWN:
-                        if file_selector.visible:
-                            result = file_selector.handle_event(event)
-                            if result == "consumed":
-                                continue
-                            elif result is not None:
-                                progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
-                                loader.stop()
-                                image_cache.clear()
-                                pygame.display.quit()
-                                pygame.display.init()
-                                return run_reader(result, start_page=1, cache_dir=cache_dir)
                     elif mode == 'webtoon' and (pygame.key.get_mods() & pygame.KMOD_CTRL):
                         if event.key == pygame.K_UP:
                             old_zoom = zoom
@@ -2355,7 +2564,7 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                             if not hasattr(manga_renderer, 'zoom') or new_zoom != old_zoom:
                                 manga_renderer.zoom = new_zoom
                                 image_cache.clear()
-                    if event.key == pygame.K_TAB:
+                    elif event.key == pygame.K_TAB:
                         thumbnail_viewer.visible = not thumbnail_viewer.visible
                     elif event.key == pygame.K_q:
                         running = False
@@ -2370,7 +2579,7 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                     elif event.key == pygame.K_RETURN and mode == 'webtoon':
                         is_scrolling = not is_scrolling
                         play_button.text = "Stop" if is_scrolling else "Play"
-                    elif not thumbnail_viewer.visible and not file_selector.visible:
+                    elif not thumbnail_viewer.visible and not file_picker.visible and not config_menu.visible:
                         if mode == 'webtoon':
                             if event.key == pygame.K_HOME: scroll_offset = 0
                             elif event.key == pygame.K_END: scroll_offset = max(0, webtoon_renderer.total_height - screen_height)
@@ -2382,8 +2591,27 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                             elif event.key in [pygame.K_PAGEDOWN, pygame.K_DOWN]: manga_renderer.next_page()
                             elif event.key in [pygame.K_PAGEUP, pygame.K_UP]: manga_renderer.prev_page()
                 elif event.type == pygame.MOUSEWHEEL:
-                    if file_selector.visible:
-                        result = file_selector.handle_event(event)
+                    if config_menu.visible:
+                        new_zoom = float(config_menu.config["webtoon_zoom"]) / 100.0 if mode == "webtoon" else float(config_menu.config["manga_zoom"]) / 100.0
+                        if new_zoom != zoom:
+                            logging.debug(f"Zoom mis à jour (en temps réel): {zoom} -> {new_zoom}")
+                            zoom = new_zoom
+                            if mode == "webtoon":
+                                webtoon_renderer.calculate_layout(zoom)
+                                image_cache.clear_except_zoom(zoom, 'webtoon')
+                            else:
+                                manga_renderer.zoom = zoom
+                                image_cache.clear()
+                        if mode == "webtoon":
+                            new_scroll_speed = config_menu.config["webtoon_scroll_speed"]
+                            if new_scroll_speed != speed_slider.value:
+                                logging.debug(f"Vitesse de défilement mise à jour (en temps réel): {speed_slider.value} -> {new_scroll_speed}")
+                                speed_slider.value = new_scroll_speed
+                        result = config_menu.handle_event(event)
+                        if result == "consumed":
+                            continue
+                    elif file_picker.visible:
+                        result = file_picker.handle_event(event)
                         if result == "consumed":
                             continue
                         elif result is not None:
@@ -2462,12 +2690,16 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                     else:
                         mode = 'webtoon'
                         mode_button.text = "Webtoon"
+                    zoom = float(config_menu.config["manga_zoom"]) / 100.0 if mode == "manga" else float(config_menu.config["webtoon_zoom"]) / 100.0
                     update_layout()
                 elif play_button.handle_event(event) and mode == 'webtoon':
                     is_scrolling = not is_scrolling
                     play_button.text = "Stop" if is_scrolling else "Play"
                 if mode == 'webtoon':
                     speed_slider.handle_event(event)
+                    if speed_slider.value != config_menu.config["webtoon_scroll_speed"]:
+                        config_menu.config["webtoon_scroll_speed"] = int(speed_slider.value)
+                        logging.debug(f"Configuration mise à jour via slider: webtoon_scroll_speed = {speed_slider.value}")
                 page_selected = thumbnail_viewer.handle_event(event)
                 if page_selected is not None:
                     if mode == 'webtoon':
@@ -2479,10 +2711,25 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                         current_page = page_selected
             t0 = print_timing("Gestion des événements", t_loop_start)
 
+            # Mettre à jour le zoom et la vitesse de défilement si modifiés
+            if config_menu.visible:
+                new_zoom = float(config_menu.config["webtoon_zoom"]) / 100.0 if mode == "webtoon" else float(config_menu.config["manga_zoom"]) / 100.0
+                if new_zoom != zoom:
+                    zoom = new_zoom
+                    if mode == "webtoon":
+                        webtoon_renderer.calculate_layout(zoom)
+                        image_cache.clear_except_zoom(zoom, 'webtoon')
+                    else:
+                        manga_renderer.zoom = zoom
+                        image_cache.clear()
+                if mode == "webtoon":
+                    new_scroll_speed = config_menu.config["webtoon_scroll_speed"]
+                    speed_slider.value = new_scroll_speed
+
             keys = pygame.key.get_pressed()
             if mode == 'manga':
                 manga_renderer.update_transition()
-            if not thumbnail_viewer.visible and not file_selector.visible:
+            if not thumbnail_viewer.visible and not file_picker.visible and not config_menu.visible:
                 if mode == 'webtoon':
                     scroll_speed = calculate_scroll_speed(zoom) // 3
                     if keys[pygame.K_DOWN] or keys[pygame.K_s] or keys[pygame.K_SPACE]:
@@ -2527,7 +2774,8 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                 speed_slider.draw(screen)
             progress_bar.draw(screen, progress, current_page, total_pages)
             thumbnail_viewer.draw(screen, current_page)
-            file_selector.draw(screen)  # Ajouter le rendu de FileSelector
+            config_menu.draw(screen)
+            file_picker.draw(screen)
             t0 = print_timing("Rendu des éléments UI", t0)
 
             pygame.display.flip()
@@ -2535,6 +2783,7 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
             clock.tick(60)
 
         progress_mgr.save(manga_name, chapter_number, current_page, total_pages, force_save=True)
+        config_menu.save_config()
         loader.stop()
         cleanup(cache_dir)
         t0 = print_timing("Nettoyage final", t0)
