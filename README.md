@@ -51,7 +51,7 @@ brew install python3 unrar poppler
 
 1. **Cloner le dépôt**
    ```bash
-   git clone https://github.com/wax-dred/webtoon_manga-tui_local.git
+   git clone https://github.com/Eaquo/webtoon_manga-tui_local.git
    cd manga-reader
    ```
 
@@ -197,7 +197,7 @@ Ce projet est distribué sous la licence MIT. Voir le fichier [LICENSE](LICENSE)
 
 ## 👨‍💻 Crédits
 
-Développé par [Wax-dred](https://github.com/wax-dred). Inspiré par la passion pour les mangas et les webtoons !
+Développé par [EAquo](https://github.com/Eaquo). Inspiré par la passion pour les mangas et les webtoons !
 
 ---
 
