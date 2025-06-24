@@ -135,7 +135,10 @@ fn run(manga_dir: PathBuf) -> Result<()> {
         } else {
             manga_dir
         };
-
+    
+    // Ouvrir la base et lancer le scan complet
+let conn = manga_indexer::open_db()?;
+manga_indexer::scan_and_index(&conn, &manga_dir)?;
     // Créer l'état de l'application
     let mut app = App::new(manga_dir, theme)?;
 

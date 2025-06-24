@@ -1,7 +1,6 @@
 use anyhow::Result;
 use log::debug;
 use rusqlite::Connection;
-use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -9,6 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
+use std::collections::HashSet;
 
 #[allow(dead_code)]
 pub struct Manga {
@@ -98,22 +98,44 @@ pub fn open_db() -> Result<Connection> {
     }
 
     // Create or update chapters table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS chapters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            manga_id INTEGER NOT NULL,
-            num INTEGER NOT NULL,
-            file TEXT NOT NULL,
-            read INTEGER DEFAULT 0,
-            last_page_read INTEGER,
-            full_pages_read INTEGER,
-            size INTEGER NOT NULL DEFAULT 0,
-            modified INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (manga_id) REFERENCES mangas(id)
-        )",
-        [],
-    )?;
-    debug!("Table 'chapters' ensured");
+    let has_unique: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_index_list('chapters') WHERE name LIKE '%manga_id_num%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0) > 0;
+
+    if !has_unique {
+        debug!("Adding UNIQUE(manga_id, num) constraint to 'chapters' table");
+
+        conn.execute("ALTER TABLE chapters RENAME TO chapters_old", [])?;
+
+        conn.execute(
+            "CREATE TABLE chapters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                manga_id INTEGER NOT NULL,
+                num INTEGER NOT NULL,
+                file TEXT NOT NULL,
+                read INTEGER DEFAULT 0,
+                last_page_read INTEGER,
+                full_pages_read INTEGER,
+                size INTEGER NOT NULL DEFAULT 0,
+                modified INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(manga_id, num),
+                FOREIGN KEY (manga_id) REFERENCES mangas(id)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "INSERT INTO chapters (id, manga_id, num, file, read, last_page_read, full_pages_read, size, modified)
+             SELECT id, manga_id, num, file, read, last_page_read, full_pages_read, size, modified FROM chapters_old",
+            [],
+        )?;
+
+        conn.execute("DROP TABLE chapters_old", [])?;
+    }
 
     // Check if size and modified columns exist
     let size_exists: bool = conn
@@ -159,37 +181,8 @@ pub fn open_db() -> Result<Connection> {
 }
 
 
-// Replace scan_and_index function (as requested)
 pub fn scan_and_index(conn: &Connection, root: &Path) -> Result<()> {
-    let last_scan_time = conn
-        .query_row(
-            "SELECT value FROM metadata WHERE key = 'last_scan_time'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .unwrap_or(0);
-
-    let mut needs_scan = false;
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() {
-            let metadata = fs::metadata(entry.path())?;
-            let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            if modified > last_scan_time {
-                needs_scan = true;
-                break;
-            }
-        }
-    }
-
-    if !needs_scan {
-        debug!("No changes detected since last scan, skipping reindexing");
-        return Ok(());
-    }
-
-    // Clear outdated data
-    conn.execute("DELETE FROM chapters", [])?;
-    conn.execute("DELETE FROM mangas", [])?;
+    debug!("Scan complet des fichiers");
 
     let (tx, rx) = mpsc::channel();
     let root_path = root.to_path_buf();
@@ -207,6 +200,13 @@ pub fn scan_and_index(conn: &Connection, root: &Path) -> Result<()> {
     });
 
     let mut manga_cache: HashMap<String, i64> = HashMap::new();
+    let mut stmt = conn.prepare("SELECT id, name FROM mangas")?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, name) = row?;
+        manga_cache.insert(name, id);
+    }
+
+    let mut found_files = HashMap::new();
 
     for path in rx {
         let manga_dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -216,24 +216,23 @@ pub fn scan_and_index(conn: &Connection, root: &Path) -> Result<()> {
             .unwrap_or("Unknown")
             .to_string();
 
-        let cover_candidates = [
-            "cover.jpg",
-            "cover.jpeg",
-            "cover.png",
-            "thumbnail.jpg",
-            "thumbnail.jpeg",
-            "thumbnail.png",
-            "poster.jpg",
-            "poster.jpeg",
-            "poster.png",
-        ];
-        let thumbnail_path = cover_candidates
-            .iter()
-            .map(|fname| manga_dir.join(fname))
-            .find(|p| p.exists())
-            .map(|p| p.to_string_lossy().to_string());
+        let manga_id = if let Some(&id) = manga_cache.get(&manga_name) {
+            id
+        } else {
+            conn.execute("INSERT INTO mangas (name) VALUES (?1)", [manga_name.clone()])?;
+            let id = conn.last_insert_rowid();
+            manga_cache.insert(manga_name.clone(), id);
+            id
+        };
 
+        // Charger cover et synopsis
+        let cover_path = ["cover.jpg", "cover.png", "cover.webp"]
+            .iter()
+            .map(|f| manga_dir.join(f))
+            .find(|p| p.exists());
         let synopsis_path = manga_dir.join("synopsis.txt");
+
+        let cover = cover_path.map(|p| p.to_string_lossy().to_string());
         let (synopsis, source_url) = if synopsis_path.exists() {
             match fs::read_to_string(&synopsis_path) {
                 Ok(text) => {
@@ -256,39 +255,69 @@ pub fn scan_and_index(conn: &Connection, root: &Path) -> Result<()> {
             (None, None)
         };
 
-        let manga_id = if let Some(&id) = manga_cache.get(&manga_name) {
-            id
-        } else {
+        if cover.is_some() || synopsis.is_some() || source_url.is_some() {
             conn.execute(
-                "INSERT INTO mangas (name, thumbnail, synopsis, source_url) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(name) DO UPDATE SET thumbnail=excluded.thumbnail, synopsis=excluded.synopsis, source_url=excluded.source_url",
+                "UPDATE mangas SET thumbnail = ?1, synopsis = ?2, source_url = ?3 WHERE id = ?4",
                 rusqlite::params![
-                    manga_name.clone(),
-                    thumbnail_path.as_deref(),
+                    cover.as_deref(),
                     synopsis.as_deref(),
-                    source_url.as_deref()
+                    source_url.as_deref(),
+                    manga_id
                 ],
             )?;
-            let id: i64 = conn.query_row(
-                "SELECT id FROM mangas WHERE name = ?1",
-                [manga_name.clone()],
-                |row| row.get(0),
-            )?;
-            manga_cache.insert(manga_name.clone(), id);
-            id
-        };
+        }
 
-        if let Some(num) =
-            extract_chapter_num(path.file_name().and_then(|n| n.to_str()).unwrap_or(""))
-        {
+        if let Some(num) = crate::manga::extract_chapter_number(
+            path.file_name().unwrap_or_default().to_str().unwrap_or(""),
+        ) {
+            let num = num as i64;
             let metadata = fs::metadata(&path)?;
-            let size = metadata.len();
+            let size = metadata.len() as i64;
             let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
+            found_files.insert((manga_id, num), path.clone());
+
             conn.execute(
-                "INSERT OR IGNORE INTO chapters (manga_id, num, file, size, modified) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![manga_id, num as i64, path.to_string_lossy().to_string(), size as i64, modified],
+                "INSERT INTO chapters (
+                    manga_id, num, file, size, modified,
+                    read, last_page_read, full_pages_read
+                )
+                VALUES (
+                    ?1, ?2, ?3, ?4, ?5,
+                    COALESCE((SELECT read FROM chapters WHERE manga_id = ?1 AND num = ?2), 0),
+                    (SELECT last_page_read FROM chapters WHERE manga_id = ?1 AND num = ?2),
+                    (SELECT full_pages_read FROM chapters WHERE manga_id = ?1 AND num = ?2)
+                )
+                ON CONFLICT(manga_id, num) DO UPDATE SET
+                    file = excluded.file,
+                    size = excluded.size,
+                    modified = excluded.modified",
+                rusqlite::params![
+                    manga_id,
+                    num,
+                    path.to_string_lossy().to_string(),
+                    size,
+                    modified
+                ],
             )?;
+        }
+    }
+
+    // Suppression des mangas dont le dossier n’existe plus
+    let root_abs = fs::canonicalize(root)?;
+    let existing_dirs: HashSet<String> = fs::read_dir(&root_abs)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+
+    let mut stmt = conn.prepare("SELECT id, name FROM mangas")?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+        let (manga_id, manga_name) = row?;
+        if !existing_dirs.contains(&manga_name) {
+            debug!("Suppression de '{}' (dossier manquant)", manga_name);
+            conn.execute("DELETE FROM chapters WHERE manga_id = ?1", [manga_id])?;
+            conn.execute("DELETE FROM mangas WHERE id = ?1", [manga_id])?;
         }
     }
 
@@ -297,14 +326,6 @@ pub fn scan_and_index(conn: &Connection, root: &Path) -> Result<()> {
         [SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64],
     )?;
 
+    debug!("Scan terminé.");
     Ok(())
-}
-
-pub fn extract_chapter_num(filename: &str) -> Option<u32> {
-    let number = crate::manga::extract_chapter_number(filename)?;
-    if number == (number as u32) as f32 {
-        Some(number as u32)
-    } else {
-        None
-    }
 }

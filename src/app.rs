@@ -727,9 +727,18 @@ impl App {
         Ok(())
     }
 
+    fn create_refresh_trigger_after(&self, delay: Duration) -> Receiver<()> {
+        let (tx, rx) = bounded(1);
+        thread::spawn(move || {
+            thread::sleep(delay);
+            let _ = tx.send(());
+        });
+        rx
+    }
+
     pub fn tick(&mut self) -> Result<()> {
         if self.is_downloading {
-            let mut should_clear_receiver = false;
+            let should_clear_receiver = false;
             {
                 if let Some(receiver) = &self.download_log_receiver {
                     while let Ok(log) = receiver.try_recv() {
@@ -741,13 +750,16 @@ impl App {
                             }
                         }
                         if clean_log.contains("Download Complete!") {
-                            self.is_downloading = false;
-                            self.download_finished = true;
-                            should_clear_receiver = true;
                             self.status = format!(
-                                "Download {} terminé. Press 'r' to refresh manga list, or continue viewing logs.",
+                                "Download {} terminé. Attendez quelques secondes avant de rafraîchir (r).",
                                 self.current_download_manga_name
                             );
+                            // Laisser download_finished à false ici pour empêcher le refresh immédiat
+                            self.download_finished = false;
+                        
+                            // Planifier un refresh différé (ex: 3s plus tard)
+                            let tx = self.create_refresh_trigger_after(Duration::from_secs(3));
+                            self.refresh_trigger = Some(tx);
                         }
                         self.download_logs.push(clean_log);
                         if self.download_logs.len() > 200 {

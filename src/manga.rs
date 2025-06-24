@@ -89,7 +89,7 @@ impl Manga {
     ) -> Result<Vec<Manga>, anyhow::Error> {
         let mut mangas = Vec::new();
         let mut stmt =
-            conn.prepare("SELECT id, name, thumbnail, synopsis, source_url FROM mangas")?;
+            conn.prepare("SELECT id, name, thumbnail, synopsis, source_url FROM mangas ORDER BY name COLLATE NOCASE")?;
         let manga_iter = stmt.query_map([], |row| {
             let thumbnail: Option<String> = row.get(2)?;
             Ok(Manga {
