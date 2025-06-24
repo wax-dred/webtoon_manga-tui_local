@@ -1531,7 +1531,7 @@ class ConfigMenu:
             return
         draw_rounded_rect(surface, self.colors["thumbnail_bg"], self.rect, radius=16, shadow=True)
         pygame.draw.rect(surface, self.colors["colors_13"], self.rect, width=3, border_radius=16)
-        title_text = self.title_font.render("Configuration", True, self.colors["foreground"])
+        title_text = self.title_font.render("Configuration Mode Webtoon", True, self.colors["foreground"])
         title_rect = title_text.get_rect(center=(self.rect.centerx, self.rect.y + 30))
         surface.blit(title_text, title_rect)
         old_clip = surface.get_clip()

@@ -307,48 +307,167 @@ for idx, current_chapter in enumerate(chapters, 1):
                 continue
 
             soup = BeautifulSoup(r.text, 'html.parser')
-            img_tags = [img for img in soup.find_all('img') if "/uploads/" in (img.get('src') or '')]
-            if len(img_tags) <= 1:
-                print(f"⚠️ No valid images for Chapter {current_chapter}")
-                sys.stdout.write(f"No valid images for Chapter {current_chapter}\n")
-                sys.stdout.flush()
-                downloaded_chapters.append((current_chapter, f"Chapitre_{current_chapter:03d}", "Failed: No images"))
-                continue
-            img_tags = img_tags[1:]  # Ignorer la première image
-
-            for img in img_tags:
-                img_url = (
-                    img.get('data-src') or
-                    img.get('src') or
-                    img.get('data-lazy-src') or
-                    img.get('data-cfsrc')
-                )
-                if img_url:
-                    if not img_url.startswith("http"):
-                        img_url = urllib.parse.urljoin(url, img_url)
-                    img_urls.append(img_url)
+            
+            # Vérifier le mode de lecture (Manga ou Webcomic)
+            reading_style_select = soup.select_one('select.selectpicker.reading-style-select')
+            is_manga_mode = True  # Par défaut, on assume Manga
+            if reading_style_select:
+                selected_option = reading_style_select.find('option', selected=True)
+                if selected_option and selected_option.text.strip().lower() == 'webcomic':
+                    is_manga_mode = False
+                    print(f"ℹ️ Webcomic mode detected for Chapter {current_chapter}")
+                else:
+                    print(f"ℹ️ Manga mode detected for Chapter {current_chapter}")
+            
+            if is_manga_mode:
+                # Mode Manga : utiliser les URLs paginées
+                page_select = soup.select_one('select#single-pager')
+                if not page_select:
+                    print(f"⚠️ No page selector found for Chapter {current_chapter}, falling back to Webcomic mode")
+                    is_manga_mode = False
+                
+                if is_manga_mode:
+                    # Extraire le nombre total de pages
+                    page_options = page_select.find_all('option')
+                    if not page_options:
+                        print(f"⚠️ No pages found in page selector for Chapter {current_chapter}")
+                        sys.stdout.write(f"No valid images for Chapter {current_chapter}\n")
+                        sys.stdout.flush()
+                        downloaded_chapters.append((current_chapter, f"Chapitre_{current_chapter:03d}", "Failed: No pages found"))
+                        continue
                     
+                    # Déterminer le nombre total de pages (par exemple, "1/53" -> 53)
+                    total_pages = 0
+                    for option in page_options:
+                        page_text = option.text.strip()  # Exemple : "1/53"
+                        if '/' in page_text:
+                            try:
+                                total_pages = max(total_pages, int(page_text.split('/')[-1]))
+                            except ValueError:
+                                continue
+                    
+                    if total_pages == 0:
+                        print(f"⚠️ Could not determine total pages for Chapter {current_chapter}")
+                        sys.stdout.write(f"No valid images for Chapter {current_chapter}\n")
+                        sys.stdout.flush()
+                        downloaded_chapters.append((current_chapter, f"Chapitre_{current_chapter:03d}", "Failed: No pages found"))
+                        continue
+                    
+                    print(f"ℹ️ Found {total_pages} pages for Chapter {current_chapter}")
+                    
+                    # Obtenir le pattern d'URL des images depuis la première page
+                    base_image_url = None
+                    try:
+                        # Charger la première page paginée pour extraire le pattern
+                        first_page_url = f"{url}/p/1/"
+                        r_first_page = scraper.get(first_page_url)
+                        if r_first_page.status_code == 200:
+                            soup_first_page = BeautifulSoup(r_first_page.text, 'html.parser')
+                            img_tag = soup_first_page.find('img', class_='wp-manga-chapter-img') or \
+                                    soup_first_page.find('img', src=re.compile(r'/WP-manga/data/'))
+                            
+                            if img_tag:
+                                img_url = (
+                                    img_tag.get('data-src') or
+                                    img_tag.get('src') or
+                                    img_tag.get('data-lazy-src') or
+                                    img_tag.get('data-cfsrc')
+                                )
+                                if img_url and '/WP-manga/data/' in img_url:
+                                    # Extraire le chemin de base (jusqu'au dossier contenant les images)
+                                    base_image_url = '/'.join(img_url.split('/')[:-1]) + '/'
+                                    print(f"ℹ️ Base image URL detected: {base_image_url}")
+                                    
+                                    # Générer toutes les URLs directement sans vérification
+                                    print(f"ℹ️ Generating {total_pages} image URLs using detected pattern")
+                                    for page_num in range(1, total_pages + 1):
+                                        img_filename = f"{page_num:02d}.png"
+                                        img_url = f"{base_image_url}{img_filename}"
+                                        img_urls.append(img_url)
+                                    
+                                    print(f"✅ Generated {len(img_urls)} image URLs for Chapter {current_chapter}")
+                    
+                    except Exception as e:
+                        print(f"⚠️ Error fetching first page to detect image pattern: {e}")
+                    
+                    # Si on n'a pas pu générer les URLs avec le pattern, fallback vers l'ancienne méthode
+                    if not img_urls:
+                        print(f"⚠️ Could not use image pattern, falling back to loading each page")
+                        for page_num in range(1, total_pages + 1):
+                            page_url = f"{url}/p/{page_num}/"
+                            try:
+                                r_page = scraper.get(page_url)
+                                if r_page.status_code != 200:
+                                    print(f"❌ Page {page_num} not accessible: {page_url}")
+                                    continue
+                                
+                                soup_page = BeautifulSoup(r_page.text, 'html.parser')
+                                img_tag = soup_page.find('img', class_='wp-manga-chapter-img') or \
+                                        soup_page.find('img', src=re.compile(r'/WP-manga/data/'))
+                                
+                                if img_tag:
+                                    img_url = (
+                                        img_tag.get('data-src') or
+                                        img_tag.get('src') or
+                                        img_tag.get('data-lazy-src') or
+                                        img_tag.get('data-cfsrc')
+                                    )
+                                    if img_url:
+                                        if not img_url.startswith("http"):
+                                            img_url = urllib.parse.urljoin(page_url, img_url)
+                                        img_urls.append(img_url)
+                                        print(f"ℹ️ Found image for page {page_num}: {img_url}")
+                                    else:
+                                        print(f"⚠️ No valid image URL found for page {page_num}")
+                                else:
+                                    print(f"⚠️ No image found for page {page_num}")
+                            
+                            except Exception as e:
+                                print(f"❌ Error fetching page {page_num}: {e}")
+                                continue
+                            
+                            time.sleep(0.2)  # Pause pour éviter de surcharger le serveur
+            
+            if not is_manga_mode or not img_urls:
+                # Mode Webcomic ou fallback : récupérer toutes les images depuis la page principale
+                img_tags = [img for img in soup.find_all('img') if "/uploads/" in (img.get('src') or '')]
+                if len(img_tags) <= 1:
+                    print(f"⚠️ No valid images for Chapter {current_chapter}")
+                    sys.stdout.write(f"No valid images for Chapter {current_chapter}\n")
+                    sys.stdout.flush()
+                    downloaded_chapters.append((current_chapter, f"Chapitre_{current_chapter:03d}", "Failed: No images"))
+                    continue
+                img_tags = img_tags[1:]  # Ignorer la première image
+
+                for img in img_tags:
+                    img_url = (
+                        img.get('data-src') or
+                        img.get('src') or
+                        img.get('data-lazy-src') or
+                        img.get('data-cfsrc')
+                    )
+                    if img_url:
+                        if not img_url.startswith("http"):
+                            img_url = urllib.parse.urljoin(url, img_url)
+                        img_urls.append(img_url)
+        
         else:  # anime-sama.fr
-            # Pour anime-sama.fr, construire directement les URLs des images
-            # Basé sur le pattern: https://anime-sama.fr/s2/scans/Hunter x Hunter/1/1.jpg
+            # [Code existant pour anime-sama.fr inchangé]
             manga_name_for_url = manga_name.replace('_', ' ')
             base_img_url = f"https://anime-sama.fr/s2/scans/{manga_name_for_url}/{current_chapter}/"
             
             print(f"🔍 Building image URLs for chapter {current_chapter}: {base_img_url}")
             
-            # Essayer de détecter le nombre de pages en testant les URLs
-            max_pages = 100  # Limite raisonnable
+            max_pages = 100
             for page in range(1, max_pages + 1):
                 img_url = f"{base_img_url}{page}.jpg"
                 try:
-                    # Faire un HEAD request pour vérifier si l'image existe
                     response = scraper.head(img_url, timeout=10)
                     if response.status_code == 200:
                         img_urls.append(img_url)
                         if page == 1:
                             print(f"✅ First image found: {img_url}")
                     else:
-                        # Si on trouve une 404, on arrête (fin du chapitre)
                         if page == 1:
                             print(f"❌ First image not found: {img_url}")
                         break
@@ -356,8 +475,6 @@ for idx, current_chapter in enumerate(chapters, 1):
                     if page == 1:
                         print(f"❌ Error checking first image: {e}")
                     break
-                    
-                # Petite pause pour ne pas surcharger le serveur
                 time.sleep(0.1)
 
         if not img_urls:
@@ -385,23 +502,27 @@ for idx, current_chapter in enumerate(chapters, 1):
             for attempt in range(max_retries):
                 try:
                     img_data = scraper.get(img_url).content
-
-                    # Ouvre l'image avec Pillow
                     img = Image.open(io.BytesIO(img_data))
-                    # Convertit en RGB (évite les soucis PNG en mode P)
                     if img.mode != "RGB":
                         img = img.convert("RGB")
 
-                    # Redimensionnement optionnel
-                    max_width = 1200  # <--- Ajuste à ce que tu veux
+                    max_width = 1200
                     if img.width > max_width:
                         ratio = max_width / img.width
                         new_size = (max_width, int(img.height * ratio))
-                        img = img.resize(new_size, Image.LANCZOS)
+                        img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-                    # Sauvegarde JPEG recompressé
                     filename_jpg = os.path.splitext(filename)[0] + ".jpg"
                     img.save(filename_jpg, "JPEG", quality=78, optimize=True, progressive=True)
+                    
+                    # Vérifier la taille du fichier
+                    file_size = os.path.getsize(filename_jpg) / 1024  # Taille en KB
+                    if file_size < 50:  # Seuil pour détecter une image invalide
+                        print(f"⚠️ Image {i} is too small ({file_size:.1f} KB), likely invalid")
+                        sys.stdout.write(f"Image {i} is too small ({file_size:.1f} KB), likely invalid\n")
+                        sys.stdout.flush()
+                        break
+                    
                     final_images.append(filename_jpg)
                     print(f"Downloaded image {i}/{len(img_urls)} for Chapter {current_chapter}")
                     sys.stdout.write(f"Downloaded image {i}/{len(img_urls)} for Chapter {current_chapter}\n")
