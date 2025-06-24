@@ -197,7 +197,7 @@ Ce projet est distribué sous la licence MIT. Voir le fichier [LICENSE](LICENSE)
 
 ## 👨‍💻 Crédits
 
-Développé par [Wax-dred](https://github.com/wax-dred). Inspiré par la passion pour les mangas et les webtoons !
+Développé par [EAquo](https://github.com/Eaquo). Inspiré par la passion pour les mangas et les webtoons !
 
 ---
 
