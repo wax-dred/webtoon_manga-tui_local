@@ -144,6 +144,7 @@ try:
         
     print(f"📖 Manga détecté: {manga_name.replace('_', ' ')}")
     sys.stdout.write(f"📖 Manga en cours de téléchargement: {manga_name.replace('_', ' ')}\n")
+    sys.stdout.write(f"🎯 Nombre de chapitres à télécharger: {len(chapters)}\n")
     sys.stdout.flush()
 except Exception as e:
     print(f"⚠️ Error fetching manga name: {e}")
@@ -284,7 +285,8 @@ downloaded_chapters: List[Tuple[int, str, str]] = []
 
 for idx, current_chapter in enumerate(chapters, 1):
     print(f"Downloading Chapter {current_chapter} ({idx}/{len(chapters)})")
-    sys.stdout.write(f"Downloading Chapter {current_chapter}\n")
+    sys.stdout.write(f"📥 Chapitre {current_chapter}: Début du téléchargement ({idx}/{len(chapters)})\n")
+    sys.stdout.write(f"📊 Progression globale: {((idx - 1) / len(chapters) * 100):.1f}%\n")
     sys.stdout.flush()
     time.sleep(0.1)  # Délai pour permettre à Rust de capturer les logs
 
@@ -297,7 +299,7 @@ for idx, current_chapter in enumerate(chapters, 1):
         img_urls = []
         
         if site == "mangas-origines":
-            url = base_url + str(current_chapter)
+            url = base_url + str(current_chapter) + "/"
             r = scraper.get(url)
             if r.status_code != 200:
                 print(f"❌ Chapter page not accessible: {url}")
@@ -485,7 +487,8 @@ for idx, current_chapter in enumerate(chapters, 1):
             continue
 
         print(f"Found {len(img_urls)} images for Chapter {current_chapter}")
-        sys.stdout.write(f"Found {len(img_urls)} images for Chapter {current_chapter}\n")
+        sys.stdout.write(f"🔍 Trouvé {len(img_urls)} images pour le Chapitre {current_chapter}\n")
+        sys.stdout.write(f"📥 Début du téléchargement des images...\n")
         sys.stdout.flush()
         time.sleep(0.1)
 
@@ -516,16 +519,17 @@ for idx, current_chapter in enumerate(chapters, 1):
                     img.save(filename_jpg, "JPEG", quality=78, optimize=True, progressive=True)
                     
                     # Vérifier la taille du fichier
-                    file_size = os.path.getsize(filename_jpg) / 1024  # Taille en KB
-                    if file_size < 50:  # Seuil pour détecter une image invalide
-                        print(f"⚠️ Image {i} is too small ({file_size:.1f} KB), likely invalid")
-                        sys.stdout.write(f"Image {i} is too small ({file_size:.1f} KB), likely invalid\n")
-                        sys.stdout.flush()
-                        break
+                    #file_size = os.path.getsize(filename_jpg) / 1024  # Taille en KB
+                    #if file_size < 50:  # Seuil pour détecter une image invalide
+                        #print(f"⚠️ Image {i} is too small ({file_size:.1f} KB), likely invalid")
+                        #sys.stdout.write(f"Image {i} is too small ({file_size:.1f} KB), likely invalid\n")
+                        #sys.stdout.flush()
+                        #break
                     
                     final_images.append(filename_jpg)
+                    progress = (i / len(img_urls)) * 100
                     print(f"Downloaded image {i}/{len(img_urls)} for Chapter {current_chapter}")
-                    sys.stdout.write(f"Downloaded image {i}/{len(img_urls)} for Chapter {current_chapter}\n")
+                    sys.stdout.write(f"📄 Image {i}/{len(img_urls)} téléchargée ({progress:.1f}% du chapitre)\n")
                     sys.stdout.flush()
                     success = True
                     break
@@ -573,11 +577,25 @@ for idx, current_chapter in enumerate(chapters, 1):
 
 # Résumé final
 print("\n🎉 Download Complete!")
-sys.stdout.write("Download Complete!\n")
+sys.stdout.write("✅ Téléchargement terminé!\n")
+sys.stdout.write(f"🎉 Résumé: {len([c for c in downloaded_chapters if 'Success' in c[2]])} chapitres téléchargés avec succès\n")
 sys.stdout.flush()
+
 if downloaded_chapters:
-    print("Download Summary:")
+    print("📋 Résumé du téléchargement:")
+    success_count = 0
     for chap, title, status in downloaded_chapters:
-        print(f"Chapter {chap} - {title}: {status}")
+        if 'Success' in status:
+            success_count += 1
+            print(f"✅ Chapitre {chap} - {title}: {status}")
+            sys.stdout.write(f"✅ Chapitre {chap}: Terminé avec succès\n")
+        else:
+            print(f"❌ Chapitre {chap} - {title}: {status}")
+            sys.stdout.write(f"❌ Chapitre {chap}: Échec - {status}\n")
+    
+    sys.stdout.write(f"📊 Statistiques finales: {success_count}/{len(downloaded_chapters)} chapitres réussis\n")
+    sys.stdout.flush()
 else:
-    print("⚠️ No chapters were downloaded.")
+    print("⚠️ Aucun chapitre n'a été téléchargé.")
+    sys.stdout.write("⚠️ Aucun chapitre n'a été téléchargé.\n")
+    sys.stdout.flush()

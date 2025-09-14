@@ -49,7 +49,7 @@ if ! command -v python3 &> /dev/null; then
     echo -e "${GREEN}Installation de Python 3...${NC}"
     case $DISTRO in
         arch)
-            sudo pacman -S --noconfirm python
+            sudo pacman -S --noconfirm python python-pip
             ;;
         debian)
             sudo apt-get update
@@ -108,9 +108,7 @@ case $DISTRO in
         ;;
     macos)
         # XQuartz pour X11 sur macOS (optionnel, peut être requis pour ratatui-image)
-        if ! command -v brew &> /dev/null; then
-            echo -e "${YELLOW}Homebrew requis pour installer XQuartz. Installez-le d'abord.${NC}"
-        else
+        if command -v brew &> /dev/null; then
             brew install --cask xquartz
         fi
         ;;
@@ -119,91 +117,51 @@ case $DISTRO in
         ;;
 esac
 
-# Fonction pour installer les dépendances Python
-install_python_deps() {
-    if [ "$DISTRO" = "arch" ]; then
-        echo -e "${YELLOW}Détection d'Arch Linux, vérification de paru...${NC}"
-        if ! command -v paru &> /dev/null; then
-            echo -e "${GREEN}Installation de paru...${NC}"
-            sudo pacman -S --noconfirm base-devel git
-            git clone https://aur.archlinux.org/paru.git /tmp/paru
-            cd /tmp/paru
-            makepkg -si --noconfirm
-            cd -
-        else
-            echo -e "${GREEN}paru est déjà installé.${NC}"
-        fi
+# Installer les dépendances Python
+echo -e "${YELLOW}Installation des dépendances Python...${NC}"
 
-        echo -e "${YELLOW}Installation des dépendances Python avec paru...${NC}"
-        paru -S --noconfirm python-rich python-requests python-beautifulsoup4 python-cloudscraper python-pillow python-pygame python-pdf2image python-rarfile
-    else
-        echo -e "${YELLOW}Installation des dépendances Python avec pip...${NC}"
-        # Essayer pipx comme fallback si pip échoue
-        if ! pip3 install rich requests beautifulsoup4 cloudscraper pillow pygame pdf2image rarfile --user; then
-            echo -e "${YELLOW}Échec de pip, tentative avec pipx...${NC}"
-            if ! command -v pipx &> /dev/null; then
-                echo -e "${YELLOW}Installation de pipx...${NC}"
-                case $DISTRO in
-                    arch)
-                        sudo pacman -S --noconfirm python-pipx
-                        ;;
-                    debian)
-                        sudo apt-get install -y pipx
-                        ;;
-                    fedora)
-                        sudo dnf install -y pipx
-                        ;;
-                    rhel)
-                        sudo dnf install -y pipx
-                        ;;
-                    opensuse)
-                        sudo zypper install -y python3-pipx
-                        ;;
-                    alpine)
-                        sudo apk add py3-pipx
-                        ;;
-                    macos)
-                        brew install pipx
-                        ;;
-                    *)
-                        echo -e "${RED}pipx non supporté. Installez les dépendances manuellement.${NC}"
-                        exit 1
-                        ;;
-                esac
-            fi
-            pipx install rich
+case $DISTRO in
+    arch)
+        echo -e "${YELLOW}Installation des packages Python avec pacman sur Arch Linux...${NC}"
+        sudo pacman -S --noconfirm python-requests python-beautifulsoup4 python-pillow python-lxml || {
+            echo -e "${RED}Erreur lors de l'installation avec pacman${NC}"
+            echo -e "${YELLOW}Installation de pipx comme alternative...${NC}"
+            sudo pacman -S --noconfirm python-pipx
             pipx install requests
             pipx install beautifulsoup4
-            pipx install cloudscraper
             pipx install pillow
-            pipx install pygame
-            pipx install pdf2image
-            pipx install rarfile
-        fi
-    fi
-}
+            pipx install cloudscraper
+            pipx install lxml
+        }
+        ;;
+    *)
+        python3 -m pip install --user requests beautifulsoup4 pillow cloudscraper lxml || {
+            echo -e "${RED}Erreur lors de l'installation des dépendances Python${NC}"
+            echo -e "${YELLOW}Essayez d'installer manuellement : python3 -m pip install --user requests beautifulsoup4 pillow cloudscraper lxml${NC}"
+            exit 1
+        }
+        ;;
+esac
 
-# Installer les dépendances Python
-install_python_deps
+# Créer le dossier bin
+mkdir -p ~/.local/bin
+
+# Ajouter ~/.local/bin au PATH si nécessaire
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    echo -e "${YELLOW}Ajout de ~/.local/bin au PATH...${NC}"
+    if [ -n "$ZSH_VERSION" ]; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+    else
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    fi
+    export PATH="$HOME/.local/bin:$PATH"
+fi
 
 # Configurer webtoon-dl comme une commande exécutable
 echo -e "${YELLOW}Configuration de webtoon-dl...${NC}"
 if [ -f "webtoon-dl.py" ]; then
     chmod +x webtoon-dl.py
-    cp -r webtoon-dl.py webtoon-dl
-    # Déplacer vers un dossier dans $PATH
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        echo -e "${YELLOW}Ajout de ~/.local/bin au PATH...${NC}"
-        # Supporter zsh et bash
-        if [ -n "$ZSH_VERSION" ]; then
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-        else
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-    fi
-    mkdir -p ~/.local/bin
-    mv webtoon-dl ~/.local/bin/
+    cp webtoon-dl.py ~/.local/bin/webtoon-dl
     echo -e "${GREEN}webtoon-dl installé comme commande exécutable.${NC}"
 else
     echo -e "${RED}Erreur : webtoon-dl.py non trouvé.${NC}"
@@ -214,29 +172,16 @@ fi
 echo -e "${YELLOW}Configuration de manga-live...${NC}"
 if [ -f "manga-live.py" ]; then
     chmod +x manga-live.py
-    cp -r manga-live.py manga-live
-    # Déplacer vers un dossier dans $PATH
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        echo -e "${YELLOW}Ajout de ~/.local/bin au PATH...${NC}"
-        # Supporter zsh et bash
-        if [ -n "$ZSH_VERSION" ]; then
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-        else
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-    fi
-    mkdir -p ~/.local/bin
-    mv manga-live ~/.local/bin/
+    cp manga-live.py ~/.local/bin/manga-live
     echo -e "${GREEN}manga-live installé comme commande exécutable.${NC}"
 else
     echo -e "${RED}Erreur : manga-live.py non trouvé.${NC}"
     exit 1
 fi
 
-# Compiler le programme Rust
+# Compiler le programme Rust en mode release
 echo -e "${YELLOW}Compilation du programme Rust...${NC}"
-cargo build
+cargo build --release
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}Compilation réussie ! L'exécutable est dans target/release/manga-reader${NC}"
 else
@@ -246,14 +191,18 @@ fi
 
 # Copier l'exécutable manga-reader vers ~/.local/bin/
 echo -e "${YELLOW}Installation de manga-reader comme commande globale...${NC}"
-if [ -f "target/debug/manga-reader" ]; then
-    cp target/debug/manga-reader ~/.local/bin/
+if [ -f "target/release/manga-reader" ]; then
+    cp target/release/manga-reader ~/.local/bin/
     chmod +x ~/.local/bin/manga-reader
     echo -e "${GREEN}manga-reader installé comme commande globale dans ~/.local/bin/${NC}"
 else
-    echo -e "${RED}Erreur : l'exécutable manga-reader n'a pas été trouvé dans target/debug/${NC}"
+    echo -e "${RED}Erreur : l'exécutable manga-reader n'a pas été trouvé dans target/release/${NC}"
     exit 1
 fi
 
 echo -e "${YELLOW}=== Installation terminée ===${NC}"
-echo -e "${GREEN}Vous pouvez maintenant exécuter 'webtoon-dl' et 'manga-reader' depuis n'importe quel terminal${NC}"
+echo -e "${GREEN}Vous pouvez maintenant exécuter :${NC}"
+echo -e "${GREEN}  - webtoon-dl${NC}"
+echo -e "${GREEN}  - manga-live${NC}"
+echo -e "${GREEN}  - manga-reader${NC}"
+echo -e "${YELLOW}Note : Redémarrez votre terminal ou exécutez 'source ~/.bashrc' pour utiliser les commandes${NC}"

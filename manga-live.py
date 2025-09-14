@@ -51,7 +51,11 @@ def load_wal_colors():
         "progress_bar_right": (120, 170, 255),
         "progress_bubble": (255, 255, 255),
         "progress_bubble_text": (70, 90, 120),
-        "thumbnail_bg": (20, 20, 20, 200)
+        "thumbnail_bg": (20, 20, 20, 200),
+        "color_12": (255, 253, 0),
+        "colors_13": (255, 133, 0),
+        "button_active": (255, 200, 0),
+        "opacity": 0
     }
     wal_path = Path.home() / ".cache" / "wal" / "wal.json"
     if not wal_path.exists():
@@ -66,7 +70,7 @@ def load_wal_colors():
             hex_str = hex_str.lstrip('#')
             return tuple(int(hex_str[i:i+2], 16) for i in (0, 2, 4))
 
-        # Vérifier et extraire les couleurs, utiliser des valeurs par défaut si absentes
+        # Vérifier et extraire les couleurs
         colors = {}
         special = wal_data.get("special", {})
         colors["background"] = hex_to_rgb(special.get("background", "#222224"))
@@ -86,6 +90,8 @@ def load_wal_colors():
         colors["progress_bubble_text"] = hex_to_rgb(wal_colors.get("color5", "#713423"))
         colors["thumbnail_bg"] = (*hex_to_rgb(wal_colors.get("color0", "#48484A")), 200)
         colors["color_12"] = hex_to_rgb(wal_colors.get("color12", "#D09E8F"))
+        # Utiliser l'alpha de wal.json si présent
+        colors["opacity"] = int(wal_data.get("alpha", "51").strip('%')) if isinstance(wal_data.get("alpha"), str) else 51
 
         logging.info(f"Couleurs chargées avec succès : {colors}")
         return colors
@@ -1398,7 +1404,8 @@ class ConfigMenu:
         default_config = {
             "manga_zoom": 100,
             "webtoon_zoom": 100,
-            "webtoon_scroll_speed": 300
+            "webtoon_scroll_speed": 300,
+            "opacity": 0
         }
         if config_path is None:
             config_path = Path.home() / ".config" / "manga_reader" / "config.json"
@@ -1560,6 +1567,17 @@ class ConfigMenu:
             text_rect = text_surf.get_rect(center=button_rect.center)
             surface.blit(text_surf, text_rect)
         surface.set_clip(old_clip)
+
+class TransparencyManager:
+    def __init__(self):
+        self.background_alpha = 128  # 0-255 (0=transparent, 255=opaque)
+        
+    def set_background_transparency(self, percentage):
+        """Définit la transparence de l'arrière-plan (0-100%)"""
+        self.background_alpha = int((percentage / 100.0) * 255)
+        
+    def get_background_alpha(self):
+        return self.background_alpha
 
 class FileSelector:
     def __init__(self, screen_width, screen_height, colors, initial_dir=None):
@@ -2040,7 +2058,7 @@ class WebtoonRenderer(BaseRenderer):
     def __init__(self, images, screen_width, screen_height, cache, sizes=None):
         super().__init__(images, screen_width, screen_height, cache)
         self.zoom = 1.0
-        self.gap = 10
+        self.gap = 5
         self.image_positions = []
         self.image_sizes = {}
         self.total_height = 0
@@ -2249,7 +2267,7 @@ def print_timing(label, t0):
     return t
 
 ### Main app loop ###
-def run_reader(archive_path, start_page=1, cache_dir=None):
+def run_reader(archive_path, start_page=1, cache_dir=None, initial_opacity=0):
     """Exécute le lecteur avec un fichier d'archive donné."""
     t0 = time.perf_counter()
     try:
@@ -2257,13 +2275,16 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
         pygame.mixer.quit()
         t0 = print_timing("Initialisation Pygame", t0)
 
-        # Charger les couleurs
+        # Charger les couleurs et initialiser le gestionnaire de transparence
         colors = load_wal_colors()
-        t0 = print_timing("Chargement des couleurs", t0)
+        transparency_mgr = TransparencyManager()
+        transparency_mgr.set_background_transparency(initial_opacity)  # Initialiser avec le pourcentage passé (0-100)
+        t0 = print_timing("Chargement des couleurs et transparence", t0)
 
+        # Utiliser une fenêtre redimensionnable avec transparence locale
         screen_info = pygame.display.Info()
-        screen_width, screen_height = screen_info.current_w - 100, screen_info.current_h - 100
-        screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE | pygame.DOUBLEBUF | pygame.HWSURFACE)
+        screen_width, screen_height = screen_info.current_w - 200, screen_info.current_h - 200
+        screen = pygame.display.set_mode((screen_width, screen_height), pygame.RESIZABLE | pygame.DOUBLEBUF | pygame.SRCALPHA)
         pygame.display.set_caption("Lecteur Webtoon")
         t0 = print_timing("Configuration de l'écran", t0)
 
@@ -2462,6 +2483,12 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                         if result == "consumed":
                             continue
                         elif result == "validate":
+                            new_opacity = config_menu.config["opacity"]
+                            current_alpha = transparency_mgr.get_background_alpha()
+                            if new_opacity != current_alpha / 255.0 * 100:  # Convertir en pourcentage
+                                transparency_mgr.set_background_transparency(new_opacity)
+                                logging.debug(f"Opacité mise à jour : {new_opacity}% (alpha={transparency_mgr.get_background_alpha()})")
+                            continue
                             # Appliquer immédiatement les modifications
                             new_zoom = float(config_menu.config["webtoon_zoom"]) / 100.0 if mode == "webtoon" else float(config_menu.config["manga_zoom"]) / 100.0
                             if new_zoom != zoom:
@@ -2711,7 +2738,6 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                         current_page = page_selected
             t0 = print_timing("Gestion des événements", t_loop_start)
 
-            # Mettre à jour le zoom et la vitesse de défilement si modifiés
             if config_menu.visible:
                 new_zoom = float(config_menu.config["webtoon_zoom"]) / 100.0 if mode == "webtoon" else float(config_menu.config["manga_zoom"]) / 100.0
                 if new_zoom != zoom:
@@ -2746,7 +2772,16 @@ def run_reader(archive_path, start_page=1, cache_dir=None):
                         manga_renderer.prev_page()
             t0 = print_timing("Mise à jour du défilement", t0)
 
-            screen.fill(colors["background"])
+            # Appliquer l'arrière-plan avec opacité contrôlée
+
+            screen_surface = pygame.Surface((screen_width, screen_height))
+            bg_rgb = colors.get("background", (11, 2, 6))
+            if not isinstance(bg_rgb, (list, tuple)) or len(bg_rgb) < 3:
+                bg_rgb = (11, 2, 6)
+            screen_surface.fill(bg_rgb)  # Arrière-plan opaque
+            screen.blit(screen_surface, (0, 0))
+
+            # Rendre les images par-dessus l'arrière-plan
             if mode == 'webtoon':
                 vis = webtoon_renderer.render(screen, scroll_offset)
                 loader.preload(vis)

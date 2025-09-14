@@ -177,6 +177,13 @@ pub fn open_db() -> Result<Connection> {
     )?;
     debug!("Index 'idx_chapters_manga_id' ensured");
 
+    // Dans manga_indexer::open_db
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mangas_name ON mangas(name)",
+        [],
+    )?;
+    debug!("Index 'idx_mangas_name' ensured");
+
     Ok(conn)
 }
 

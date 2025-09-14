@@ -292,3 +292,52 @@
 [2025-06-24 21:28:18] INFO - Démarrage de l'application manga reader
 [2025-06-24 21:32:07] INFO - Démarrage de l'application manga reader
 [2025-06-24 21:35:24] INFO - Démarrage de l'application manga reader
+[2025-07-03 10:52:40] INFO - Démarrage de l'application manga reader
+[2025-07-03 10:57:55] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:37:28] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:39:35] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:40:17] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:46:10] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:49:10] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:50:26] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:51:19] INFO - Démarrage de l'application manga reader
+[2025-07-12 08:52:52] INFO - Démarrage de l'application manga reader
+[2025-07-12 09:04:38] INFO - Démarrage de l'application manga reader
+[2025-07-12 09:06:22] INFO - Démarrage de l'application manga reader
+[2025-07-13 18:08:45] INFO - Démarrage de l'application manga reader
+[2025-07-21 15:34:07] INFO - Démarrage de l'application manga reader
+[2025-09-09 18:56:34] INFO - Démarrage de l'application manga reader
+[2025-09-09 18:56:34] DEBUG - Opening database at: "/home/florian/.config/manga_reader/library.db"
+[2025-09-09 18:56:34] DEBUG - Database connection established
+[2025-09-09 18:56:34] DEBUG - Adding UNIQUE(manga_id, num) constraint to 'chapters' table
+[2025-09-09 18:56:34] DEBUG - Table 'metadata' ensured
+[2025-09-09 18:56:34] DEBUG - Index 'idx_chapters_manga_id' ensured
+[2025-09-09 18:56:34] DEBUG - Index 'idx_mangas_name' ensured
+[2025-09-09 18:56:50] INFO - Démarrage de l'application manga reader
+[2025-09-09 19:17:46] INFO - Démarrage de l'application manga reader
+[2025-09-09 19:29:16] INFO - Démarrage de l'application manga reader
+[2025-09-09 20:26:59] INFO - Démarrage de l'application manga reader
+[2025-09-09 20:29:05] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:10:34] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:13:38] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:14:02] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:15:55] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:19:52] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:20:09] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:23:59] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:25:27] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:26:39] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:33:34] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:33:52] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:42:03] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:43:04] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:43:52] INFO - Démarrage de l'application manga reader
+[2025-09-10 12:44:16] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:04:08] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:11:19] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:13:00] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:13:36] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:17:02] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:20:22] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:21:39] INFO - Démarrage de l'application manga reader
+[2025-09-10 17:27:28] INFO - Démarrage de l'application manga reader

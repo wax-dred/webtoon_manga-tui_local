@@ -23,7 +23,6 @@ use std::fs;
 use rusqlite::OptionalExtension;
 use std::time::{UNIX_EPOCH};
 use crate::manga_indexer::{open_db, scan_and_index};
-use std::fs::metadata;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum InputField {
@@ -73,8 +72,6 @@ pub struct App {
     pub current_download_manga_name: String,
     pub needs_refresh: bool,
     pub refresh_trigger: Option<Receiver<()>>,
-    pub last_log_count: usize,
-    pub last_download_complete: bool,
     pub should_quit: bool,
     pub last_mouse_scroll: Instant,
     pub image_cache: HashMap<PathBuf, (u32, u32, DynamicImage, u64)>, // Un seul champ avec 4 éléments
@@ -86,6 +83,8 @@ pub struct App {
     pub pending_image_load: Option<usize>,
     #[allow(dead_code)]
     pub last_cover_load: Instant,
+    pub last_selection_change: Instant,
+    pub render_image: bool,
 }
 
 impl App {
@@ -160,8 +159,6 @@ impl App {
             current_download_manga_name: String::new(),
             needs_refresh: false,
             refresh_trigger: None,
-            last_log_count: 0,
-            last_download_complete: false,
             should_quit: false,
             last_mouse_scroll: Instant::now().checked_sub(Duration::from_millis(120)).unwrap_or_else(Instant::now),
             image_cache: HashMap::new(),
@@ -170,84 +167,67 @@ impl App {
             image_load_receiver: result_rx,
             pending_image_load: None,
             last_cover_load: Instant::now(),
+            last_selection_change: Instant::now(),
+            render_image: true,
         };
         
         app.refresh_manga_list()?;
+        app.preload_images();
         
         Ok(app)
     }
     
     pub fn load_cover_image(&mut self) -> Result<()> {
         let current_selected_manga = self.selected_manga;
-        let thumbnail_path_str = self
+        let thumbnail_path = self
             .selected_manga
             .and_then(|idx| self.mangas.get(idx))
-            .and_then(|manga| manga.thumbnail.as_ref());
-        debug!("Loading cover for manga index: {:?}, thumbnail path: {:?}", current_selected_manga, thumbnail_path_str);
+            .and_then(|manga| manga.thumbnail.as_ref())
+            .map(PathBuf::from);
     
-        let thumbnail_path = thumbnail_path_str.map(PathBuf::from);
-        debug!("Thumbnail path converted: {:?}", thumbnail_path);
+        debug!("Loading cover for manga index: {:?}, thumbnail path: {:?}", current_selected_manga, thumbnail_path);
     
-        // Vérifier si l'image est en cache et valide
+        // Vérifier si l'image est déjà dans le cache
         if let Some(path) = thumbnail_path.as_ref() {
-            if let Some(&(width, height, ref img, modified)) = self.image_cache.get(path) {
-                if let Ok(meta) = metadata(path) {
-                    let current_modified = meta.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
-                    if current_modified <= modified {
-                        debug!("Using cached image: {:?}", path);
-                        self.image_manager.image_info = Some((width, height, img.clone()));
-                        if self.selected_manga == current_selected_manga {
-                            self.image_state = Some(self.image_picker.new_resize_protocol(img.clone()));
-                        }
-                        return Ok(());
-                    } else {
-                        debug!("Cached image outdated for {:?}", path);
-                        self.image_cache.remove(path);
-                    }
+            if let Some(&(width, height, ref img, _)) = self.image_cache.get(path) {
+                debug!("Using cached image: {:?}", path);
+                self.image_manager.image_info = Some((width, height, img.clone()));
+                if self.selected_manga == current_selected_manga {
+                    self.image_state = Some(self.image_picker.new_resize_protocol(img.clone()));
                 }
+                self.pending_image_load = None; // Pas de chargement en attente
+                return Ok(());
             }
         }
     
-        self.image_manager.clear();
-        debug!("Image manager cleared");
-    
-        if let Some(path) = thumbnail_path.as_ref() {
-            match crate::util::load_image_info(path) {
-                Ok((width, height, img)) => {
-                    debug!("Loaded new image: {}x{}", width, height);
-                    let modified = metadata(path)?.modified()?.duration_since(UNIX_EPOCH)?.as_secs();
-                    self.image_cache.insert(path.to_path_buf(), (width, height, img.clone(), modified));
-                    self.image_manager.image_info = Some((width, height, img.clone()));
-    
-                    // Vérification des dimensions avant de créer le protocol
-                    if width > 0 && height > 0 {
-                        if self.selected_manga == current_selected_manga {
-                            self.image_state = Some(self.image_picker.new_resize_protocol(img));
-                        }
-                    } else {
-                        debug!("Invalid image dimensions: {}x{}", width, height);
-                        self.image_state = None;
-                    }
-                }
-                Err(e) => {
-                    debug!("Failed to load image: {:?}", e);
-                    self.image_manager.image_info = None;
-                    self.image_state = None;
-                }
-            }
+        // Si pas dans le cache, envoyer une demande de chargement asynchrone
+        if let Some(path) = thumbnail_path {
+            debug!("Image not in cache, sending async load request for: {:?}", path);
+            self.pending_image_load = current_selected_manga; // Marquer comme en attente
+            self.image_manager.clear();
+            self.image_state = None; // Effacer l'image actuelle en attendant
+            let _ = self.image_load_sender.send((current_selected_manga.unwrap_or(0), Some(path)));
         } else {
             debug!("No thumbnail path provided");
             self.image_manager.image_info = None;
             self.image_state = None;
-        }
-    
-        if self.selected_manga != current_selected_manga {
-            debug!("Selected manga changed during load (was {:?}, now {:?}), aborting image state update", current_selected_manga, self.selected_manga);
+            self.pending_image_load = None;
         }
     
         Ok(())
     }
     
+    fn preload_images(&mut self) {
+        let paths: Vec<(usize, PathBuf)> = self.mangas.iter().enumerate()
+            .filter_map(|(idx, manga)| manga.thumbnail.as_ref().map(|path| (idx, path.clone())))
+            .collect();
+        let tx = self.image_load_sender.clone();
+        thread::spawn(move || {
+            for (idx, path) in paths {
+                let _ = tx.send((idx, Some(path))); // Envoie le chemin, pas l'image chargée
+            }
+        });
+    }
 
     pub fn refresh_manga_list(&mut self) -> Result<()> {
         debug!("Refreshing manga list from {:?}", self.manga_dir);
@@ -739,32 +719,27 @@ impl App {
     pub fn tick(&mut self) -> Result<()> {
         if self.is_downloading {
             let should_clear_receiver = false;
-            {
-                if let Some(receiver) = &self.download_log_receiver {
-                    while let Ok(log) = receiver.try_recv() {
-                        let clean_log = strip_ansi_escapes(&log);
-                        if clean_log.contains("📖 Manga en cours de téléchargement:") {
-                            if let Some(name) = clean_log.split("📖 Manga en cours de téléchargement: ").nth(1) {
-                                self.current_download_manga_name = name.trim().to_string();
-                                debug!("Updated current_download_manga_name to: {}", self.current_download_manga_name);
-                            }
+            if let Some(receiver) = &self.download_log_receiver {
+                while let Ok(log) = receiver.try_recv() {
+                    let clean_log = strip_ansi_escapes(&log);
+                    if clean_log.contains("📖 Manga en cours de téléchargement:") {
+                        if let Some(name) = clean_log.split("📖 Manga en cours de téléchargement: ").nth(1) {
+                            self.current_download_manga_name = name.trim().to_string();
+                            debug!("Updated current_download_manga_name to: {}", self.current_download_manga_name);
                         }
-                        if clean_log.contains("Download Complete!") {
-                            self.status = format!(
-                                "Download {} terminé. Attendez quelques secondes avant de rafraîchir (r).",
-                                self.current_download_manga_name
-                            );
-                            // Laisser download_finished à false ici pour empêcher le refresh immédiat
-                            self.download_finished = false;
-                        
-                            // Planifier un refresh différé (ex: 3s plus tard)
-                            let tx = self.create_refresh_trigger_after(Duration::from_secs(3));
-                            self.refresh_trigger = Some(tx);
-                        }
-                        self.download_logs.push(clean_log);
-                        if self.download_logs.len() > 200 {
-                            self.download_logs.drain(0..self.download_logs.len() - 200);
-                        }
+                    }
+                    if clean_log.contains("Download Complete!") {
+                        self.status = format!(
+                            "Download {} terminé. Attendez quelques secondes avant de rafraîchir (r).",
+                            self.current_download_manga_name
+                        );
+                        self.download_finished = false;
+                        let tx = self.create_refresh_trigger_after(Duration::from_secs(3));
+                        self.refresh_trigger = Some(tx);
+                    }
+                    self.download_logs.push(clean_log);
+                    if self.download_logs.len() > 200 {
+                        self.download_logs.drain(0..self.download_logs.len() - 200);
                     }
                 }
             }
@@ -780,6 +755,29 @@ impl App {
                 self.status = "Manga list refreshed after closing external reader.".to_string();
                 self.needs_refresh = true;
                 self.refresh_trigger = None;
+            }
+        }
+    
+        // Gérer les images chargées de manière asynchrone
+        while let Ok((manga_idx, result)) = self.image_load_receiver.try_recv() {
+            if Some(manga_idx) == self.pending_image_load && manga_idx == self.selected_manga.unwrap_or(0) {
+                if let Some((width, height, img)) = result {
+                    debug!("Received async image load for manga {}: {}x{}", manga_idx, width, height);
+                    if let Some(path) = self.mangas.get(manga_idx).and_then(|manga| manga.thumbnail.clone()) {
+                        self.image_cache.insert(path.clone(), (width, height, img.clone(), 0));
+                        self.image_manager.image_info = Some((width, height, img.clone()));
+                        if width > 0 && height > 0 {
+                            self.image_state = Some(self.image_picker.new_resize_protocol(img));
+                            self.needs_refresh = true; // Forcer un rafraîchissement de l'interface
+                        }
+                        self.pending_image_load = None; // Chargement terminé
+                    }
+                } else {
+                    debug!("Failed to load image for manga {}", manga_idx);
+                    self.pending_image_load = None;
+                    self.image_state = None;
+                    self.needs_refresh = true;
+                }
             }
         }
     
@@ -990,9 +988,11 @@ impl App {
                             } else {
                                 None
                             };
+                            self.render_image = true; // Toujours activer le rendu
                             if let Ok(()) = self.load_cover_image() {
                                 debug!("Selected manga: {:?}", self.selected_manga);
                             }
+                            self.last_selection_change = Instant::now();
                         }
                     } else if let Some(manga) = self.current_manga() {
                         if !manga.chapters.is_empty() {
@@ -1018,9 +1018,11 @@ impl App {
                             } else {
                                 None
                             };
+                            self.render_image = true; // Toujours activer le rendu
                             if let Ok(()) = self.load_cover_image() {
                                 debug!("Selected manga: {:?}", self.selected_manga);
                             }
+                            self.last_selection_change = Instant::now();
                         }
                     } else if let Some(manga) = self.current_manga() {
                         if !manga.chapters.is_empty() {

@@ -6,6 +6,7 @@ mod manga;
 mod manga_indexer;
 mod theme;
 mod ui;
+mod ui_modern;
 mod util;
 
 use env_logger;
